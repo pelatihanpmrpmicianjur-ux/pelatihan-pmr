@@ -28,23 +28,18 @@ export default function PilihTendaPage() {
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
 
-  useEffect(() => {
+    useEffect(() => {
         const id = localStorage.getItem('registrationId');
-
         if (!id) {
             toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
             router.push('/pendaftaran/1-data-sekolah');
-            return; // Hentikan eksekusi jika tidak ada ID
+            return;
         }
-        
-        // Pada titik ini, kita tahu `id` adalah string.
         setRegistrationId(id);
 
         async function fetchInitialData(regId: string) {
-            // Fungsi ini sekarang secara eksplisit menerima `regId` sebagai `string`.
             setIsLoading(true);
             try {
-                // `regId` di sini dijamin 100% adalah string.
                 const [tentsRes, summaryResult] = await Promise.all([
                     fetch('/api/tents'),
                     getSummaryAction(regId)
@@ -54,6 +49,8 @@ export default function PilihTendaPage() {
                 const tentsData: TentType[] = await tentsRes.json();
                 setTentTypes(tentsData);
                 
+                // Coba ambil order yang sudah ada (misalnya dari reservasi sebelumnya)
+                // Ini bisa disempurnakan dengan mengambil data reservasi dari summary
                 const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
                 if (cachedOrder) {
                     setOrder(JSON.parse(cachedOrder));
@@ -67,38 +64,43 @@ export default function PilihTendaPage() {
                 const totalPeople = summaryResult.data.participantSummary.count + summaryResult.data.companionSummary.count;
                 setTotalParticipants(totalPeople);
             } catch (error: unknown) {
-                if (error instanceof Error) {
-                    toast.error(error.message);
-                } else {
-                    toast.error("Terjadi kesalahan saat memuat data awal.");
-                }
+                if (error instanceof Error) toast.error(error.message);
+                else toast.error("Terjadi kesalahan saat memuat data awal.");
             } finally {
                 setIsLoading(false);
             }
         }
         
-        // Panggil fungsi dengan `id` yang kita tahu adalah string.
         fetchInitialData(id);
-        
     }, [router]);
   
-    const updateReservation = useCallback(async (currentOrder: TentOrderItem[]) => {
-      if (!registrationId) {
+    // ====================================================================
+    // === PERBAIKAN UTAMA DI SINI ===
+    // ====================================================================
+    const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
+      // Periksa regId yang diteruskan sebagai argumen
+      if (!regId) {
+          console.log("updateReservation dibatalkan: tidak ada registrationId.");
           return;
       }
-      localStorage.setItem(`tent_order_${registrationId}`, JSON.stringify(currentOrder));
+      localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
       setIsUpdating(true);
-      const result = await reserveTentsAction(registrationId, currentOrder);
+      
+      const result = await reserveTentsAction(regId, currentOrder);
+      
       if (!result.success) {
           toast.error(result.message);
+          // Jika stok tidak cukup, refresh data tenda dari server
           if (result.message.includes("Stok tenda tidak mencukupi")) {
               const res = await fetch('/api/tents');
-              const updatedTents = await res.json();
-              setTentTypes(updatedTents);
+              if (res.ok) {
+                const updatedTents = await res.json();
+                setTentTypes(updatedTents);
+              }
           }
       }
       setIsUpdating(false);
-    }, [registrationId]);
+    }, []); // <-- Hapus semua dependensi dari useCallback
 
     useEffect(() => {
         if (isInitialMount.current) {
@@ -106,10 +108,11 @@ export default function PilihTendaPage() {
             return;
         }
 
-        if (registrationId) {
-            updateReservation(debouncedOrder);
-        }
-    }, [debouncedOrder, updateReservation, registrationId]);
+        // Panggil updateReservation dengan state `registrationId` saat ini
+        updateReservation(debouncedOrder, registrationId);
+
+    }, [debouncedOrder, registrationId, updateReservation]); // <-- `registrationId` sekarang menjadi dependensi
+    // ====================================================================
 
     const handleQuantityChange = (tentTypeId: number, change: number) => {
         setOrder(currentOrder => 

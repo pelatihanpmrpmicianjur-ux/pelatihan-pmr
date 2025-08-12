@@ -188,7 +188,6 @@ export async function processExcelAction(registrationId: string, filePath: strin
         const imageReferences: ImageReference[] = pesertaSheet.getImages();
         const pesertaData: ParticipantRowData[] = [];
         const pendampingData: CompanionRowData[] = [];
-        const images = pesertaSheet.getImages();
         // --- Tahap 1: Baca data dari Excel (Operasi Cepat) ---
         pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
             if (rowNumber < DATA_START_ROW) return;
