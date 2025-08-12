@@ -181,7 +181,8 @@ export async function processExcelAction(registrationId: string, filePath: strin
         const pesertaSheet = workbook.getWorksheet('Data Peserta');
         if (!pesertaSheet) return { success: false, message: "Sheet 'Data Peserta' tidak ditemukan." };
         
-        const images = pesertaSheet.getImages();
+        // Buat salinan yang bisa kita mutasi
+        let availableImages = [...pesertaSheet.getImages()];
         const pesertaData: ParticipantRowData[] = [];
         
         pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
@@ -199,23 +200,33 @@ export async function processExcelAction(registrationId: string, filePath: strin
                 photoPath: null,
             };
 
-            const imageRef = images.find(img => {
-                if (!img.range?.tl) return false;
-                const range = img.range;
-                const isCorrectColumn = range.tl.nativeCol === 9;
-                if (!isCorrectColumn) return false;
-                if (!range.br) return (range.tl.nativeRow + 1) === rowNumber;
-                return rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
+            let bestMatchIndex = -1;
+            let smallestDistance = Infinity;
+
+            availableImages.forEach((img, index) => {
+                if (img.range?.tl?.nativeCol === 9) { // Pastikan di kolom foto
+                    const imageTopRow = img.range.tl.nativeRow + 1;
+                    const distance = Math.abs(rowNumber - imageTopRow);
+                    
+                    // Kita cari gambar yang dimulai di baris ini atau sedikit di atasnya
+                    if (rowNumber >= imageTopRow && distance < smallestDistance) {
+                        smallestDistance = distance;
+                        bestMatchIndex = index;
+                    }
+                }
             });
 
-            // *** PERBAIKAN KRUSIAL #1: SIMPAN imageId ***
-            if (imageRef) {
-                rowData.imageIdToProcess = imageRef.imageId; // Pastikan baris ini ada
+            if (bestMatchIndex !== -1) {
+                // Jika ditemukan gambar yang cocok, simpan ID-nya dan HAPUS dari daftar
+                const matchedImage = availableImages[bestMatchIndex];
+                rowData.imageIdToProcess = matchedImage.imageId;
+                availableImages.splice(bestMatchIndex, 1); // Hapus gambar agar tidak bisa dipilih lagi
+                console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): GAMBAR COCOK -> ID ${matchedImage.imageId}`);
             } else {
-                // Ini membantu debugging
-                console.log(`[PHOTO_DEBUG] Tidak ditemukan gambar untuk baris ${rowData.rowNumber}: ${rowData.fullName}`);
+                 console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): TIDAK ADA GAMBAR COCOK`);
             }
-                        
+            // ====================================================================
+            
             pesertaData.push(rowData);
         });
 
@@ -312,16 +323,16 @@ export async function processExcelAction(registrationId: string, filePath: strin
         console.log(`[ACTION_PROCESS_EXCEL] Transaksi database selesai.`);
 
         const previewPesertaForClient = pesertaData.map(p => ({
-                        rowNumber: p.rowNumber,
-                        fullName: p.fullName,
-                        birthInfo: p.birthInfo,
-                        address: p.address,
-                        religion: p.religion,
-                        bloodType: p.bloodType,
-                        entryYear: p.entryYear,
-                        phone: p.phone,
-                        gender: p.gender,
-            photoPath: p.photoPath,
+            rowNumber: p.rowNumber,
+            fullName: p.fullName,
+            birthInfo: p.birthInfo,
+            address: p.address,
+            religion: p.religion,
+            bloodType: p.bloodType,
+            entryYear: p.entryYear,
+            phone: p.phone,
+            gender: p.gender,
+            photoPath: p.photoPath, // Ini akan null jika upload gagal
         }));
         
         const previewPendampingForClient = pendampingData.map(p => ({
@@ -919,13 +930,13 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-        const logoPath = path.join(process.cwd(), 'jobs', 'assets', 'logo-pmi.png');
+        const logoPath = path.join(process.cwd(), 'public', 'logo-pmi.png');
         const logoPngBytes = await fs.readFile(logoPath);
 
 
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
-        const { width: A5_WIDTH, height: A5_HEIGHT } = page.getSize();
+        const { height: A5_HEIGHT } = page.getSize();
 
         // Setup font dan gambar
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
