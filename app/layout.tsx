@@ -25,12 +25,8 @@ export default function RootLayout({
           {children}
         </SmoothScrolling>
         <Toaster />
-        
-        
       </body>
-          
-          
-        
+
     </html>
   );
 }
