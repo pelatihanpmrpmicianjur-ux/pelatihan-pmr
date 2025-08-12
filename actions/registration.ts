@@ -210,9 +210,12 @@ export async function processExcelAction(registrationId: string, filePath: strin
 
             // *** PERBAIKAN KRUSIAL #1: SIMPAN imageId ***
             if (imageRef) {
-                rowData.imageIdToProcess = imageRef.imageId;
+                rowData.imageIdToProcess = imageRef.imageId; // Pastikan baris ini ada
+            } else {
+                // Ini membantu debugging
+                console.log(`[PHOTO_DEBUG] Tidak ditemukan gambar untuk baris ${rowData.rowNumber}: ${rowData.fullName}`);
             }
-            
+                        
             pesertaData.push(rowData);
         });
 
@@ -956,7 +959,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
         page.drawText("Pendaftaran PMR Kab. Cianjur 2025", { x: margin + logoSize + 20, y: A5_HEIGHT - 55, font: font, size: 10, color: rgb(0.9, 0.9, 0.9) });
 
         page.drawText("No. Order", { x: 430, y: A5_HEIGHT - 30, font: font, size: 8, color: white });
-        page.drawText(registration.customOrderId || '-', { x: 430, y: A5_HEIGHT - 45, font: boldFont, size: 10, color: white });
+        page.drawText(orderId, { x: 430, y: A5_HEIGHT - 45, font: boldFont, size: 10, color: white });
 
         // --- Info Sekolah & Tanggal ---
         page.drawText("DITERIMA DARI", { x: margin, y: A5_HEIGHT - 110, font: font, size: 10, color: textGray });
@@ -1018,7 +1021,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
         // --- Simpan PDF ---
          const pdfBytes = await pdfDoc.save();
         
-        const safeOrderId = (orderId).replace(/\//g, '_');
+         const safeOrderId = orderId.replace(/\//g, '_');
         const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeOrderId}.pdf`;
 
         const { error: receiptUploadError } = await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });

@@ -1,7 +1,7 @@
 // File: app/pendaftaran/2-upload-excel/page.tsx
 'use client';
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,14 +12,14 @@ import Image from "next/image";
 import { CheckCircle, XCircle, Loader2, ChevronDown, Eye } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabase/client";
-import { FileUpload } from "@/components/ui/file-upload";
+import { FileUpload } from "@/components/ui/file-upload"; // Nama komponen dari Aceternity UI
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { requestUploadUrlAction, processExcelAction } from "@/actions/registration";
 
 // Tipe data lengkap yang diharapkan dari API/Action
-type ParticipantPreview = { rowNumber: number; fullName: string; birthInfo: string; address: string; religion: string; bloodType: string | null; entryYear: number; phone: string | null; gender: string; photoPath: string | null; };
-type CompanionPreview = { rowNumber: number; fullName: string; birthInfo: string; address: string; religion: string; bloodType: string | null; entryYear: number; phone: string | null; gender: string; };
+type ParticipantPreview = { rowNumber: number | null; fullName: string; birthInfo: string; address: string; religion: string; bloodType: string | null; entryYear: number; phone: string | null; gender: string; photoPath: string | null; };
+type CompanionPreview = { rowNumber: number | null; fullName: string; birthInfo: string; address: string; religion: string; bloodType: string | null; entryYear: number; phone: string | null; gender: string; };
 type Summary = {
     pesertaCount: number;
     pendampingCount: number;
@@ -29,14 +29,12 @@ type Summary = {
 };
 type DataTableRow = ParticipantPreview | CompanionPreview;
 
-// Fungsi helper untuk mengubah path menjadi URL publik
 function getPublicUrlFromPath(path: string | null): string {
     if (!path) return '/default-avatar.png';
     const { data } = supabase.storage.from('registrations').getPublicUrl(path);
     return data.publicUrl;
 }
 
-// Fungsi Type Guard untuk memeriksa apakah item adalah ParticipantPreview
 function isParticipant(item: DataTableRow): item is ParticipantPreview {
     return 'photoPath' in item;
 }
@@ -301,12 +299,16 @@ const DataTableRowComponent = ({ item, type }: { item: DataTableRow, type: 'pese
         <TableCell className="text-center font-medium">{item.rowNumber}</TableCell>
         {type === 'peserta' && (
             <TableCell>
-                {isParticipant(item) && <Image src={getPublicUrlFromPath(item.photoPath)} alt={item.fullName} width={40} height={40} className="rounded-full object-cover aspect-square" />}
+                {/* `isParticipant` memastikan `item` memiliki `photoPath` */}
+                {isParticipant(item) && (
+                    <Image src={getPublicUrlFromPath(item.photoPath)} alt={item.fullName} width={40} height={40} className="rounded-full object-cover aspect-square" />
+                )}
             </TableCell>
         )}
         <TableCell className="font-semibold">{item.fullName}</TableCell>
         <TableCell className="text-sm">{item.birthInfo}</TableCell>
-        <TableCell className="text-sm">{isParticipant(item) ? item.phone : (item as CompanionPreview).phone || '-'}</TableCell>
+        {/* Menggunakan `item.phone` yang ada di kedua tipe preview */}
+        <TableCell className="text-sm">{item.phone || '-'}</TableCell>
         <TableCell className="text-center">
             <Dialog>
                 <DialogTrigger asChild>
@@ -317,7 +319,7 @@ const DataTableRowComponent = ({ item, type }: { item: DataTableRow, type: 'pese
                     <div className="grid gap-4 py-4">
                         {type === 'peserta' && isParticipant(item) && (
                             <div className="relative mx-auto w-32 h-32 mb-4">
-                                <Image src={getPublicUrlFromPath(item.photoPath)} alt={item.fullName} layout="fill" className="rounded-full object-cover" />
+                                <Image src={getPublicUrlFromPath(item.photoPath)} alt={item.fullName} fill className="rounded-full object-cover" />
                             </div>
                         )}
                         <DetailRow label="Alamat" value={item.address} />
