@@ -7,7 +7,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { registrationQueue } from '@/lib/queue';
-import { slugify } from '@/lib/utils'; // Pastikan normalize juga diimpor jika diperlukan
+import { slugify, normalizeSchoolName } from '@/lib/utils';
 import { Registration, Participant, Companion, TentBooking, TentReservation, TentType } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import sharp from 'sharp';
@@ -90,6 +90,12 @@ export async function getVerificationDataAction(registrationId: string): Promise
     }
 }
 
+type ImageReference = {
+    type: 'image';
+    imageId: string; // Ternyata ini string, bukan number
+    range: ExcelJS.ImageRange;
+};
+
 interface ParticipantRowData {
   rowNumber: number | null;
   fullName: string;
@@ -102,7 +108,7 @@ interface ParticipantRowData {
   gender: string;
   photoPath: string | null;
   // Properti sementara untuk pemrosesan
-  imageIdToProcess?: number;
+  imageIdToProcess?: string;
 }
 
 interface CompanionRowData {
@@ -116,6 +122,7 @@ interface CompanionRowData {
   phone: string | null;
   gender: string;
 }
+
 
 type SummaryData = {
     schoolInfo: {
@@ -172,189 +179,164 @@ export async function processExcelAction(registrationId: string, filePath: strin
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(fileBuffer);
         
-        const pesertaSheet = workbook.getWorksheet('Data Peserta'); // <-- Perbaikan Nama Sheet
-        const pendampingSheet = workbook.getWorksheet('Data Pendamping'); // <-- Perbaikan Nama Sheet
+        const pesertaSheet = workbook.getWorksheet('Data Peserta');
+        const pendampingSheet = workbook.getWorksheet('Data Pendamping');
 
         if (!pesertaSheet) {
             return { success: false, message: "Sheet 'Data Peserta' tidak ditemukan di dalam file Excel. Harap gunakan template yang benar." };
         }
-
+        const imageReferences: ImageReference[] = pesertaSheet.getImages();
         const pesertaData: ParticipantRowData[] = [];
         const pendampingData: CompanionRowData[] = [];
-        
-        // Proses Data Peserta
-     if (pesertaSheet) {
-          // ======================================================
-          // === LOG DIAGNOSTIK #1: Cek semua gambar yang terdeteksi ===
-          // ======================================================
-          const images = pesertaSheet.getImages();
-          console.log(`\n[DIAGNOSTIK] Ditemukan total ${images.length} gambar di sheet 'Data Peserta'.`);
-          if (images.length > 0) {
-            console.log("[DIAGNOSTIK] Detail Posisi Gambar (indeks berbasis 0):");
-            images.forEach((img, index) => {
-              console.log(`  - Gambar ${index + 1}: Kolom Mulai=${img.range.tl.nativeCol}, Baris Mulai=${img.range.tl.nativeRow}`);
-            });
-          }
-          // ======================================================
-          
-          pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        const images = pesertaSheet.getImages();
+        // --- Tahap 1: Baca data dari Excel (Operasi Cepat) ---
+        pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
             if (rowNumber < DATA_START_ROW) return;
-    
             const rowData: ParticipantRowData = {
-              rowNumber: row.getCell(1).value as number,
-              fullName: row.getCell(2).value as string || 'N/A',
-              birthInfo: row.getCell(3).value as string || 'N/A',
-              address: row.getCell(4).value as string || 'N/A',
-              religion: row.getCell(5).value as string || 'N/A',
-              bloodType: row.getCell(6).value as string || null,
-              entryYear: row.getCell(7).value as number,
-              phone: row.getCell(8).value?.toString() || null,
-              gender: row.getCell(9).value as string || 'N/A',
-              photoPath: null as string | null,
+                rowNumber: row.getCell(1).value as number | null,
+                fullName: row.getCell(2).value as string || 'N/A',
+                birthInfo: row.getCell(3).value as string || 'N/A',
+                address: row.getCell(4).value as string || 'N/A',
+                religion: row.getCell(5).value as string || 'N/A',
+                bloodType: row.getCell(6).value as string || null,
+                entryYear: row.getCell(7).value as number || new Date().getFullYear(),
+                phone: row.getCell(8).value?.toString() || null,
+                gender: row.getCell(9).value as string || 'N/A',
+                photoPath: null,
             };
-    
-       const image = images.find(img => {
-              if (!img.range || !img.range.tl) return false;
-              const range = img.range;
-              const isCorrectColumn = range.tl.nativeCol === 9;
-              if (!isCorrectColumn) return false;
-              if (!range.br) {
-                return (range.tl.nativeRow + 1) === rowNumber;
-              } else {
-                const isWithinRowRange = rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
-                return isWithinRowRange;
-              }
+
+              const imageRef = imageReferences.find((img) => {
+                if (!img.range || !img.range.tl) return false;
+                // `img.range` sekarang dijamin ada karena tipe kita
+                const range = img.range;
+                const isCorrectColumn = range.tl.nativeCol === 9;
+                if (!isCorrectColumn) return false;
+                
+                if (!range.br) {
+                    return (range.tl.nativeRow + 1) === rowNumber;
+                } else {
+                    return rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
+                }
             });
-    
-             if (image) {
-                rowData.imageIdToProcess = parseInt(image.imageId, 10);
+
+            if (imageRef) {
+                // Simpan imageId (yang merupakan string) untuk diproses nanti
+                rowData.imageIdToProcess = imageRef.imageId;
             }
             
             pesertaData.push(rowData);
-          });
-        }
-        
-        // Proses Data Pendamping
+        });
+
         if (pendampingSheet) {
             pendampingSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
                 if (rowNumber < DATA_START_ROW) return;
                 pendampingData.push({
-                  rowNumber: row.getCell(1).value as number,
+                  rowNumber: row.getCell(1).value as number | null,
                   fullName: row.getCell(2).value as string || 'N/A',
                   birthInfo: row.getCell(3).value as string || 'N/A',
                   address: row.getCell(4).value as string || 'N/A',
                   religion: row.getCell(5).value as string || 'N/A',
                   bloodType: row.getCell(6).value as string || null,
-                  entryYear: row.getCell(7).value as number,
+                  entryYear: row.getCell(7).value as number || new Date().getFullYear(),
                   phone: row.getCell(8).value?.toString() || null,
                   gender: row.getCell(9).value as string || 'N/A',
                 });
             });
         }
     
-        // 3. Upload foto dan simpan data ke DB dalam transaksi
-         await prisma.$transaction(async (tx) => {
-            await tx.participant.deleteMany({ where: { registrationId } });
-            await tx.companion.deleteMany({ where: { registrationId } });
-    
-            for (const p of pesertaData) {
-                if (p.imageIdToProcess !== undefined) { // Cek `undefined` lebih aman
-                 const image = workbook.getImage(p.imageIdToProcess);
-                    if (image && image.buffer) {
-                        const optimizedBuffer = await sharp(image.buffer).resize({ width: 400, height: 600, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
-                        const participantSlug = slugify(p.fullName || `peserta-${p.rowNumber}`);
-                        const uniqueFileName = `${participantSlug}_row_${p.rowNumber}.jpeg`;
-                        const photoPath = getPhotoPath(schoolSlug, uniqueFileName); // <-- Perbaikan Argumen
-                        
-                        const { error: uploadError } = await supabaseAdmin.storage.from('registrations').upload(photoPath, optimizedBuffer, { contentType: 'image/jpeg', upsert: true });
-                        if (uploadError) {
-                            console.error(`Gagal upload foto untuk peserta ${p.fullName}:`, uploadError.message);
-                        } else {
-                            p.photoPath = photoPath;
-                        }
+        // --- Tahap 2: Lakukan semua operasi I/O lambat (upload) DI LUAR TRANSAKSI ---
+        console.log(`[ACTION_PROCESS_EXCEL] Memulai pra-proses dan upload untuk ${pesertaData.length} peserta.`);
+        
+       await Promise.all(pesertaData.map(async (p) => {
+            if (p.imageIdToProcess) {
+                const image = workbook.getImage(parseInt(p.imageIdToProcess, 10));
+                if (image && image.buffer) {
+                    const optimizedBuffer = await sharp(image.buffer).resize({ width: 400, height: 600, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
+                    const participantSlug = slugify(p.fullName || `peserta-${p.rowNumber}`);
+                    const uniqueFileName = `${participantSlug}_${registrationId}_row_${p.rowNumber}.jpeg`;
+                    const photoPath = getPhotoPath(schoolSlug, uniqueFileName);
+                    
+                    const { error: uploadError } = await supabaseAdmin.storage.from('registrations').upload(photoPath, optimizedBuffer, { contentType: 'image/jpeg', upsert: true });
+                    
+                    if (uploadError) {
+                        console.error(`Gagal upload foto untuk peserta ${p.fullName}:`, uploadError.message);
+                        p.photoPath = null;
+                    } else {
+                        p.photoPath = photoPath;
                     }
                 }
-                delete p.imageIdToProcess;
             }
-    
-          if (pesertaData.length > 0) {
-            await tx.participant.createMany({ 
-              data: pesertaData.map(p => ({
-                registrationId,
-                rowNumber: p.rowNumber,
-                fullName: p.fullName,
-                birthInfo: p.birthInfo,
-                address: p.address,
-                religion: p.religion,
-                bloodType: p.bloodType,
-                entryYear: p.entryYear,
-                phone: p.phone,
-                gender: p.gender,
-                photoPath: p.photoPath, // <-- Pastikan photoPath dipetakan secara eksplisit
-              })) 
+        }));
+        
+        console.log(`[ACTION_PROCESS_EXCEL] Selesai pra-proses dan upload.`);
+
+        // --- Tahap 3: Jalankan transaksi database yang SANGAT CEPAT ---
+        console.log(`[ACTION_PROCESS_EXCEL] Memulai transaksi database...`);
+        await prisma.$transaction(async (tx) => {
+            await tx.participant.deleteMany({ where: { registrationId } });
+            await tx.companion.deleteMany({ where: { registrationId } });
+
+            if (pesertaData.length > 0) {
+                await tx.participant.createMany({ 
+                    data: pesertaData.map(p => ({
+                        registrationId,
+                        rowNumber: p.rowNumber,
+                        fullName: p.fullName,
+                        birthInfo: p.birthInfo,
+                        address: p.address,
+                        religion: p.religion,
+                        bloodType: p.bloodType,
+                        entryYear: p.entryYear,
+                        phone: p.phone,
+                        gender: p.gender,
+                        photoPath: p.photoPath,
+                    })) 
+                });
+            }
+            
+            if (pendampingData.length > 0) {
+                await tx.companion.createMany({ 
+                    data: pendampingData.map(p => ({
+                        registrationId,
+                        rowNumber: p.rowNumber,
+                        fullName: p.fullName,
+                        birthInfo: p.birthInfo,
+                        address: p.address,
+                        religion: p.religion,
+                        bloodType: p.bloodType,
+                        entryYear: p.entryYear,
+                        phone: p.phone,
+                        gender: p.gender,
+                    }))
+                });
+            }
+            
+            const totalCostPeserta = pesertaData.length * COST_PESERTA;
+            const totalCostPendamping = pendampingData.length * COST_PENDAMPING;
+            
+            await tx.registration.update({
+                where: { id: registrationId },
+                data: { excelTempPath: filePath, totalCostPeserta, totalCostPendamping },
             });
-          }
-          
-          if (pendampingData.length > 0) {
-            await tx.companion.createMany({ 
-              data: pendampingData.map(p => ({
-                registrationId,
-                rowNumber: p.rowNumber,
-                fullName: p.fullName,
-                birthInfo: p.birthInfo,
-                address: p.address,
-                religion: p.religion,
-                bloodType: p.bloodType,
-                entryYear: p.entryYear,
-                phone: p.phone,
-                gender: p.gender,
-              }))
-            });
-          }
-          
-          const totalCostPeserta = pesertaData.length * COST_PESERTA;
-          const totalCostPendamping = pendampingData.length * COST_PENDAMPING;
-          
-          await tx.registration.update({
-            where: { id: registrationId },
-            data: {
-              excelTempPath: filePath,
-              totalCostPeserta,
-              totalCostPendamping,
-            },
-          });
+        }, {
+            timeout: 20000, // 20 detik (Peningkatan timeout sebagai jaring pengaman)
         });
+        console.log(`[ACTION_PROCESS_EXCEL] Transaksi database selesai.`);
+
+        const previewPesertaForClient = pesertaData.map(p => ({
+            rowNumber: p.rowNumber,
+            fullName: p.fullName,
+            birthInfo: p.birthInfo,
+            photoPath: p.photoPath,
+        }));
+        
+        const previewPendampingForClient = pendampingData.map(p => ({
+            rowNumber: p.rowNumber,
+            fullName: p.fullName,
+            birthInfo: p.birthInfo,
+        }));
     
-        // --- PERBAIKAN UTAMA ADA DI SINI ---
-        // Memastikan `previewPeserta` selalu ada dalam objek `summary` yang dikembalikan.
-        // Jika tidak ada peserta, ini akan mengembalikan array kosong `[]`,
-        // yang aman untuk di-map atau dicek `.length`-nya di frontend.
-    const previewPesertaForClient = pesertaData.map(p => ({
-        rowNumber: p.rowNumber,
-        fullName: p.fullName,
-        birthInfo: p.birthInfo,
-        address: p.address,
-        religion: p.religion,
-        bloodType: p.bloodType,
-        entryYear: p.entryYear,
-        phone: p.phone,
-        gender: p.gender,
-        photoPath: p.photoPath,
-    }));
-    
-    const previewPendampingForClient = pendampingData.map(p => ({
-        rowNumber: p.rowNumber,
-        fullName: p.fullName,
-        birthInfo: p.birthInfo,
-        address: p.address,
-        religion: p.religion,
-        bloodType: p.bloodType,
-        entryYear: p.entryYear,
-        phone: p.phone,
-        gender: p.gender,
-    }));
-    
-   return {
+        return {
             success: true,
             message: 'File Excel berhasil diproses.',
             summary: {
@@ -367,14 +349,11 @@ export async function processExcelAction(registrationId: string, filePath: strin
         };
     
     } catch (error: unknown) {
-        console.error("Error processing excel with exceljs:", error);
+        console.error("Error processing excel action:", error);
         if (error instanceof Error) {
-            if (error instanceof TypeError) {
-                return { success: false, message: 'Gagal memproses file Excel. Pastikan format kolom dan nama sheet ("Data Peserta", "Data Pendamping") sudah benar sesuai template.' };
-            }
             return { success: false, message: `Gagal memproses file Excel: ${error.message}` };
         }
-        return { success: false, message: 'Terjadi kesalahan yang tidak diketahui.' };
+        return { success: false, message: 'Terjadi kesalahan yang tidak diketahui saat memproses file.' };
     }
 }
 
