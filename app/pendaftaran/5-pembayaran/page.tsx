@@ -1,4 +1,3 @@
-// File: app/pendaftaran/5-pembayaran/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -8,7 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { getSummaryAction, getReceiptUrlAction } from '@/actions/registration';
+// --- Impor SEMUA server actions yang relevan ---
+import { getSummaryAction, getReceiptUrlAction, submitRegistrationAction } from '@/actions/registration';
 import { Loader2, CheckCircle, Download, Landmark, UserCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -87,13 +87,17 @@ export default function PembayaranPage() {
             const MAX_SIZE_MB = 5;
             if (selectedFile.size > MAX_SIZE_MB * 1024 * 1024) {
                 toast.error(`Ukuran file bukti pembayaran tidak boleh melebihi ${MAX_SIZE_MB}MB.`);
-                e.target.value = ''; // Reset input
+                e.target.value = '';
+                setFile(null); // Juga reset state file
                 return;
             }
             setFile(selectedFile);
         }
     };
     
+    // ======================================================
+    // === PERBAIKAN UTAMA: Gunakan Server Action, bukan fetch ===
+    // ======================================================
     const handleSubmit = async () => {
         if (!file || !registrationId) {
             toast.error("Harap pilih file bukti pembayaran atau sesi tidak valid.");
@@ -105,26 +109,25 @@ export default function PembayaranPage() {
         try {
             const formData = new FormData();
             formData.append('paymentProof', file);
-            // --- TAMBAHKAN ID KE FORMDATA DI SINI ---
-            formData.append('registrationId', registrationId);
 
-            // --- GUNAKAN URL API STATIS YANG BARU ---
-            const response = await fetch(`/api/registrations/submit`, {
-                method: 'POST',
-                body: formData,
-            });
+            // Panggil Server Action secara langsung
+            const data = await submitRegistrationAction(registrationId, formData);
             
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.message);
+            if (!data.success) {
+                throw new Error(data.message);
+            }
             
-            // ... (sisa logika sukses tidak berubah)
-            setOrderId(data.orderId);
+            // Logika sukses tidak berubah
+            setOrderId(data.orderId || '');
             setFinalRegistrationId(registrationId);
             setIsSuccess(true);
             toast.success("Pendaftaran Anda telah berhasil dikirim!", { id: toastId });
+            
+            // Pembersihan localStorage
             localStorage.removeItem('registrationId');
             localStorage.removeItem(`summary_${registrationId}`);
             localStorage.removeItem(`tent_order_${registrationId}`);
+
         } catch (error: unknown) {
             if (error instanceof Error) {
                 toast.error(error.message, { id: toastId });
