@@ -12,8 +12,6 @@ import ExcelJS from 'exceljs';
 import path from 'path';
 import sharp from 'sharp';
 import qrcode from 'qrcode';
-import { glob } from 'glob';
-import fs from 'fs/promises';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 // Definisikan tipe untuk hasil (return value) dari action
 type ActionResult = {
@@ -936,22 +934,18 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-        console.log(`[PDF_ASSET_DEBUG] Mencari logo-pmi.png dari root: ${process.cwd()}`);
+         const logoUrl = `${APP_URL}/logo-pmi.png`;
+
+            console.log(`[PDF_ASSET_DEBUG] Mencoba mengunduh logo dari: ${logoUrl}`);
             
-            // Cari file 'logo-pmi.png' di seluruh direktori kerja
-            // `.` berarti mulai dari `process.cwd()`
-            const searchPattern = '**/logo-pmi.png';
-            const foundFiles = await glob(searchPattern, { cwd: process.cwd(), absolute: true });
-
-            console.log(`[PDF_ASSET_DEBUG] Hasil pencarian glob:`, foundFiles);
-
-            if (foundFiles.length === 0) {
-                throw new Error("File 'logo-pmi.png' tidak ditemukan di dalam deployment bundle. Pastikan file ada di folder public/.");
+            const logoResponse = await fetch(logoUrl);
+            if (!logoResponse.ok) {
+                throw new Error(`Gagal mengunduh file logo. Status: ${logoResponse.status}`);
             }
-            
-            const logoPath = foundFiles[0]; // Ambil hasil pertama yang ditemukan
-            console.log(`[PDF_ASSET_DEBUG] Menggunakan path logo: ${logoPath}`);
-            const logoPngBytes = await fs.readFile(logoPath);
+
+            // Ubah respons menjadi ArrayBuffer, lalu menjadi Buffer Node.js
+            const logoArrayBuffer = await logoResponse.arrayBuffer();
+            const logoPngBytes = Buffer.from(logoArrayBuffer);
 
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
