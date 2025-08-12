@@ -1,11 +1,12 @@
-// File: app/api/admin/participants/route.ts
+// File: app/api/admin/companions/route.ts
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 
-export async function GET() {
+export async function GET() { // Anda bisa ganti ke GET(_request: Request)
     const session = await getServerSession(authOptions);
+    // Anda bisa perkuat dengan if (!session?.user?.id)
     if (!session) {
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }

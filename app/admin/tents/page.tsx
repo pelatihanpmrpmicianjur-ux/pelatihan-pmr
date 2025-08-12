@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Download, School, Tent, Users } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 
 // Tipe data yang diharapkan dari API /api/admin/tents
 type TentBookingData = {
@@ -19,7 +21,7 @@ type TentBookingData = {
 
 export default function AllTentsPage() {
     const [tentBookings, setTentBookings] = useState<TentBookingData[]>([]);
-    const [isLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         async function fetchData() {
@@ -29,24 +31,23 @@ export default function AllTentsPage() {
                 const data = await res.json();
                 setTentBookings(data);
             } catch (error: unknown) {
-    if (error instanceof Error) {
-        toast.error(error.message);
-    } else {
-        toast.error("Terjadi kesalahan yang tidak diketahui");
-    }
+                if (error instanceof Error) {
+                    toast.error(error.message);
+                } else {
+                    toast.error("Terjadi kesalahan yang tidak diketahui saat memuat data.");
+                }
+            } finally {
+                setIsLoading(false);
             }
         }
         fetchData();
     }, []);
 
-    // Gunakan useMemo untuk menghitung total secara efisien.
-    // Kalkulasi ini hanya akan berjalan ulang jika `tentBookings` berubah.
     const summary = useMemo(() => {
         const totalSchools = new Set(tentBookings.map(t => t.schoolName)).size;
         const totalTents = tentBookings.reduce((sum, t) => sum + t.quantity, 0);
         const totalCapacityProvided = tentBookings.reduce((sum, t) => sum + t.totalCapacity, 0);
         
-        // Ringkasan per tipe tenda
         const tentsByType = tentBookings.reduce((acc, booking) => {
             const capacityStr = `Kapasitas ${booking.capacity}`;
             if (!acc[capacityStr]) {
@@ -59,7 +60,6 @@ export default function AllTentsPage() {
         return { totalSchools, totalTents, totalCapacityProvided, tentsByType };
     }, [tentBookings]);
     
-    // Fungsi generik untuk ekspor ke CSV
     const handleExportCSV = () => {
         if (tentBookings.length === 0) {
             toast.warning("Tidak ada data untuk diekspor.");
@@ -92,16 +92,26 @@ export default function AllTentsPage() {
         }
     };
 
+    const TableSkeleton = () => (
+        Array.from({ length: 4 }).map((_, index) => (
+            <TableRow key={`skeleton-tent-${index}`}>
+                <TableCell><Skeleton className="h-5 w-48" /></TableCell>
+                <TableCell className="text-center"><Skeleton className="h-5 w-24 mx-auto" /></TableCell>
+                <TableCell className="text-center"><Skeleton className="h-5 w-16 mx-auto" /></TableCell>
+                <TableCell className="text-right"><Skeleton className="h-5 w-24 ml-auto" /></TableCell>
+            </TableRow>
+        ))
+    );
+
     return (
         <div className="space-y-6">
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                <h1 className="text-3xl font-bold">Data Tenda</h1>
-                <Button onClick={handleExportCSV}>
+                <h1 className="text-3xl font-bold">Rekapitulasi Sewa Tenda</h1>
+                <Button onClick={handleExportCSV} disabled={isLoading || tentBookings.length === 0}>
                     <Download className="mr-2 h-4 w-4" /> Ekspor ke CSV
                 </Button>
             </div>
             
-            {/* Kartu Ringkasan */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -109,7 +119,7 @@ export default function AllTentsPage() {
                         <School className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{isLoading ? '...' : summary.totalSchools}</div>
+                        {isLoading ? <Skeleton className="h-8 w-12 mt-1" /> : <div className="text-2xl font-bold">{summary.totalSchools}</div>}
                         <p className="text-xs text-muted-foreground">Total sekolah yang menyewa tenda</p>
                     </CardContent>
                 </Card>
@@ -119,7 +129,7 @@ export default function AllTentsPage() {
                         <Tent className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{isLoading ? '...' : summary.totalTents}</div>
+                        {isLoading ? <Skeleton className="h-8 w-12 mt-1" /> : <div className="text-2xl font-bold">{summary.totalTents}</div>}
                         <p className="text-xs text-muted-foreground">Jumlah semua unit tenda yang disewa</p>
                     </CardContent>
                 </Card>
@@ -129,30 +139,36 @@ export default function AllTentsPage() {
                         <Users className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{isLoading ? '...' : summary.totalCapacityProvided.toLocaleString('id-ID')}</div>
+                        {isLoading ? <Skeleton className="h-8 w-20 mt-1" /> : <div className="text-2xl font-bold">{summary.totalCapacityProvided.toLocaleString('id-ID')}</div>}
                         <p className="text-xs text-muted-foreground">Total kapasitas dari semua tenda</p>
                     </CardContent>
                 </Card>
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                         <CardTitle className="text-sm font-medium">Rincian per Tipe</CardTitle>
-                        <Tent className="h-4 w-4 text-black" />
+                        <Tent className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        {isLoading ? <p className="text-xs">...</p> : 
+                        {isLoading ? (
+                            <div className="space-y-2 mt-1">
+                                <Skeleton className="h-4 w-full" />
+                                <Skeleton className="h-4 w-full" />
+                            </div>
+                        ) : Object.keys(summary.tentsByType).length > 0 ? (
                             Object.entries(summary.tentsByType).map(([type, count]) => (
                                 <div key={type} className="text-sm flex justify-between">
                                     <span>{type}</span>
                                     <span className="font-semibold">{count} unit</span>
                                 </div>
                             ))
-                        }
+                        ) : (
+                            <p className="text-xs text-muted-foreground">Belum ada tenda yang disewa.</p>
+                        )}
                     </CardContent>
                 </Card>
             </div>
             
-            {/* Tabel Rincian */}
-            <div className="border rounded-md">
+            <div className="border rounded-md bg-white shadow-sm">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -163,19 +179,23 @@ export default function AllTentsPage() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {isLoading ? (
-                            <TableRow><TableCell colSpan={4} className="h-24 text-center">Memuat data...</TableCell></TableRow>
-                        ) : tentBookings.length > 0 ? (
-                            tentBookings.map((booking, index) => (
-                                <TableRow key={`${booking.schoolName}-${booking.capacity}-${index}`}>
-                                    <TableCell className="font-medium">{booking.schoolName}</TableCell>
-                                    <TableCell className="text-center">{booking.capacity} orang</TableCell>
-                                    <TableCell className="text-center">{booking.quantity} unit</TableCell>
-                                    <TableCell className="text-right font-semibold">{booking.totalCapacity} orang</TableCell>
+                        {isLoading ? <TableSkeleton /> : (
+                            tentBookings.length > 0 ? (
+                                tentBookings.map((booking, index) => (
+                                    <TableRow key={`${booking.schoolName}-${booking.capacity}-${index}`}>
+                                        <TableCell className="font-medium">{booking.schoolName}</TableCell>
+                                        <TableCell className="text-center">{booking.capacity} orang</TableCell>
+                                        <TableCell className="text-center">{booking.quantity} unit</TableCell>
+                                        <TableCell className="text-right font-semibold">{booking.totalCapacity} orang</TableCell>
+                                    </TableRow>
+                                ))
+                            ) : (
+                                <TableRow>
+                                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                                        Belum ada data sewa tenda yang terkonfirmasi.
+                                    </TableCell>
                                 </TableRow>
-                            ))
-                        ) : (
-                            <TableRow><TableCell colSpan={4} className="h-24 text-center">Belum ada sekolah yang menyewa tenda.</TableCell></TableRow>
+                            )
                         )}
                     </TableBody>
                 </Table>
