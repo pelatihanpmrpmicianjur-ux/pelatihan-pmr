@@ -1,9 +1,6 @@
+
 {
   "crons": [
-    {
-      "path": "/api/cron/cleanup-reservations",
-      "schedule": "*/5 * * * *"
-    },
     {
       "path": "/api/cron/cleanup-drafts",
       "schedule": "0 1 * * *"
