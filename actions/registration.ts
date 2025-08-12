@@ -181,9 +181,26 @@ export async function processExcelAction(registrationId: string, filePath: strin
         const pesertaSheet = workbook.getWorksheet('Data Peserta');
         if (!pesertaSheet) return { success: false, message: "Sheet 'Data Peserta' tidak ditemukan." };
         
-        // Buat salinan yang bisa kita mutasi
-        let availableImages = [...pesertaSheet.getImages()];
+        const images = pesertaSheet.getImages();
         const pesertaData: ParticipantRowData[] = [];
+
+        // ====================================================================
+        // === LOGIKA PENCOCOKAN BARU YANG JAUH LEBIH SEDERHANA DAN KETAT ===
+        // ====================================================================
+        
+        // 1. Buat sebuah Map untuk akses gambar yang cepat berdasarkan baris mulainya
+        const imageMap = new Map<number, ExcelJS.Image>();
+        images.forEach(img => {
+            if (img.range?.tl?.nativeCol === 9) { // Hanya gambar di kolom Foto
+                const startRow = img.range.tl.nativeRow + 1; // Konversi ke 1-based index
+                // Hanya simpan gambar pertama yang ditemukan untuk satu baris, mencegah duplikat
+                if (!imageMap.has(startRow)) {
+                    imageMap.set(startRow, workbook.getImage(parseInt(img.imageId, 10)));
+                }
+            }
+        });
+        
+        console.log(`[PHOTO_DEBUG] Total ${imageMap.size} gambar unik dipetakan ke baris.`);
         
         pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
             if (rowNumber < DATA_START_ROW) return;
@@ -200,32 +217,14 @@ export async function processExcelAction(registrationId: string, filePath: strin
                 photoPath: null,
             };
 
-            let bestMatchIndex = -1;
-            let smallestDistance = Infinity;
-
-            availableImages.forEach((img, index) => {
-                if (img.range?.tl?.nativeCol === 9) { // Pastikan di kolom foto
-                    const imageTopRow = img.range.tl.nativeRow + 1;
-                    const distance = Math.abs(rowNumber - imageTopRow);
-                    
-                    // Kita cari gambar yang dimulai di baris ini atau sedikit di atasnya
-                    if (rowNumber >= imageTopRow && distance < smallestDistance) {
-                        smallestDistance = distance;
-                        bestMatchIndex = index;
-                    }
-                }
-            });
-
-            if (bestMatchIndex !== -1) {
-                // Jika ditemukan gambar yang cocok, simpan ID-nya dan HAPUS dari daftar
-                const matchedImage = availableImages[bestMatchIndex];
-                rowData.imageIdToProcess = matchedImage.imageId;
-                availableImages.splice(bestMatchIndex, 1); // Hapus gambar agar tidak bisa dipilih lagi
-                console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): GAMBAR COCOK -> ID ${matchedImage.imageId}`);
+            if (imageMap.has(rowNumber)) {
+                const matchedImage = imageMap.get(rowNumber);
+                // Kita tidak lagi butuh imageIdToProcess, langsung simpan buffer-nya
+                (rowData as any).imageBufferToProcess = matchedImage?.buffer; 
+                console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): GAMBAR DITEMUKAN.`);
             } else {
-                 console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): TIDAK ADA GAMBAR COCOK`);
+                 console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): TIDAK ADA GAMBAR COCOK.`);
             }
-            // ====================================================================
             
             pesertaData.push(rowData);
         });
@@ -252,19 +251,25 @@ export async function processExcelAction(registrationId: string, filePath: strin
         // --- Tahap 2: Lakukan semua operasi I/O lambat (upload) DI LUAR TRANSAKSI ---
         console.log(`[ACTION_PROCESS_EXCEL] Memulai pra-proses dan upload untuk ${pesertaData.length} peserta.`);
         
-      await Promise.all(pesertaData.map(async (p) => {
-            if (p.imageIdToProcess) {
-                const image = workbook.getImage(parseInt(p.imageIdToProcess, 10));
-                if (image?.buffer) {
-                    const optimizedBuffer = await sharp(image.buffer).resize({ width: 400, height: 600, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
+ await Promise.all(pesertaData.map(async (p: any) => {
+            // Cek properti baru: imageBufferToProcess
+            if (p.imageBufferToProcess) {
+                try {
+                    const optimizedBuffer = await sharp(p.imageBufferToProcess).resize({ width: 400, height: 600, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
                     const participantSlug = slugify(p.fullName || `peserta-${p.rowNumber}`);
                     const uniqueFileName = `${participantSlug}_${registrationId}_row_${p.rowNumber}.jpeg`;
                     const photoPath = getPhotoPath(schoolSlug, uniqueFileName);
                     const { error } = await supabaseAdmin.storage.from('registrations').upload(photoPath, optimizedBuffer, { contentType: 'image/jpeg', upsert: true });
-                    if (error) console.error(`Gagal upload foto untuk ${p.fullName}:`, error.message);
-                    else p.photoPath = photoPath;
+                    
+                    if (error) throw error;
+                    p.photoPath = photoPath; // Set path jika berhasil
+                } catch (uploadError) {
+                    console.error(`Gagal upload foto untuk ${p.fullName}:`, uploadError);
+                    p.photoPath = null;
                 }
             }
+            // Hapus properti sementara
+            delete p.imageBufferToProcess;
         }));
         
         console.log(`[ACTION_PROCESS_EXCEL] Selesai pra-proses dan upload.`);
@@ -930,8 +935,8 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-        const logoPath = path.join(process.cwd(), 'public', 'logo-pmi.png');
-        const logoPngBytes = await fs.readFile(logoPath);
+        const logoPath = path.resolve(process.cwd(), 'public', 'logo-pmi.png');
+            const logoPngBytes = await fs.readFile(logoPath);
 
 
         const pdfDoc = await PDFDocument.create();
