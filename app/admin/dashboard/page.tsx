@@ -5,7 +5,9 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { prisma } from "@/lib/db";
 import { RegistrationStatus } from "@prisma/client";
-
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { redirect } from 'next/navigation';
 // Definisikan tipe data yang kita ambil, meskipun tidak digunakan
 // oleh state, ini baik untuk kejelasan.
 type RegistrationListItem = {
@@ -37,9 +39,21 @@ const statusTextMap: { [key in RegistrationStatus]: string } = {
 // Komponen halaman sekarang adalah fungsi ASYNC
 export default async function DashboardPage() {
     
-    // Langsung panggil Prisma untuk mengambil data di server saat request.
-    // Error handling untuk query ini akan ditangkap oleh error boundary Next.js.
-    const registrations: RegistrationListItem[] = await prisma.registration.findMany({
+    // ======================================================
+    // === PERBAIKAN KEAMANAN: PERIKSA SESI DI SINI ===
+    // ======================================================
+    const session = await getServerSession(authOptions);
+
+    // Jika tidak ada sesi (pengguna belum login), alihkan ke halaman login.
+    // Gunakan URL yang kita tentukan di `pages` di authOptions.
+    if (!session) {
+        redirect('/login'); 
+    }
+    // ======================================================
+
+
+    // Kode ini hanya akan berjalan jika pengguna sudah login.
+    const registrations = await prisma.registration.findMany({
         orderBy: {
             createdAt: 'desc',
         },
