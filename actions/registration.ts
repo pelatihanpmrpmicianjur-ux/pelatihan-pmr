@@ -12,6 +12,7 @@ import ExcelJS from 'exceljs';
 import path from 'path';
 import sharp from 'sharp';
 import qrcode from 'qrcode';
+import { glob } from 'glob';
 import fs from 'fs/promises';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 // Definisikan tipe untuk hasil (return value) dari action
@@ -935,18 +936,22 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-        const logoPath = path.resolve(process.cwd(), 'logo-pmi.png');
-    
-    // Sebagai jaring pengaman, coba kedua lokasi (untuk kompatibilitas lokal dan Vercel)
-    let logoPngBytes;
-    try {
-        logoPngBytes = await fs.readFile(logoPath);
-    } catch (e) {
-        // Jika gagal (mungkin di env lokal yang strukturnya berbeda), coba path `public/`
-        console.warn("Gagal membaca logo dari root, mencoba dari 'public/'...");
-        const fallbackLogoPath = path.resolve(process.cwd(), 'public', 'logo-pmi.png');
-        logoPngBytes = await fs.readFile(fallbackLogoPath);
-    }
+        console.log(`[PDF_ASSET_DEBUG] Mencari logo-pmi.png dari root: ${process.cwd()}`);
+            
+            // Cari file 'logo-pmi.png' di seluruh direktori kerja
+            // `.` berarti mulai dari `process.cwd()`
+            const searchPattern = '**/logo-pmi.png';
+            const foundFiles = await glob(searchPattern, { cwd: process.cwd(), absolute: true });
+
+            console.log(`[PDF_ASSET_DEBUG] Hasil pencarian glob:`, foundFiles);
+
+            if (foundFiles.length === 0) {
+                throw new Error("File 'logo-pmi.png' tidak ditemukan di dalam deployment bundle. Pastikan file ada di folder public/.");
+            }
+            
+            const logoPath = foundFiles[0]; // Ambil hasil pertama yang ditemukan
+            console.log(`[PDF_ASSET_DEBUG] Menggunakan path logo: ${logoPath}`);
+            const logoPngBytes = await fs.readFile(logoPath);
 
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
