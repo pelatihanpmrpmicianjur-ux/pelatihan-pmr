@@ -173,26 +173,18 @@ export async function processExcelAction(registrationId: string, filePath: strin
         }
 
         const schoolSlug = slugify(registration.schoolNameNormalized);
-        const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage.from('registrations').download(filePath);
-        if (downloadError) {
-            console.error("Supabase download error:", downloadError);
-            return { success: false, message: `Gagal mengunduh file dari storage: ${downloadError.message}` };
-        }
+        const fileBlob = await (await supabaseAdmin.storage.from('registrations').download(filePath)).data?.arrayBuffer();
+        if (!fileBlob) throw new Error("Gagal mengunduh file Excel dari storage.");
         
-        const fileBuffer = await fileBlob.arrayBuffer();
         const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(fileBuffer);
+        await workbook.xlsx.load(fileBlob);
         
         const pesertaSheet = workbook.getWorksheet('Data Peserta');
-        const pendampingSheet = workbook.getWorksheet('Data Pendamping');
-
-        if (!pesertaSheet) {
-            return { success: false, message: "Sheet 'Data Peserta' tidak ditemukan di dalam file Excel. Harap gunakan template yang benar." };
-        }
-        const imageReferences: ImageReference[] = pesertaSheet.getImages();
+        if (!pesertaSheet) return { success: false, message: "Sheet 'Data Peserta' tidak ditemukan." };
+        
+        const images = pesertaSheet.getImages();
         const pesertaData: ParticipantRowData[] = [];
-        const pendampingData: CompanionRowData[] = [];
-        // --- Tahap 1: Baca data dari Excel (Operasi Cepat) ---
+        
         pesertaSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
             if (rowNumber < DATA_START_ROW) return;
             const rowData: ParticipantRowData = {
@@ -208,29 +200,25 @@ export async function processExcelAction(registrationId: string, filePath: strin
                 photoPath: null,
             };
 
-              const imageRef = imageReferences.find((img) => {
-                if (!img.range || !img.range.tl) return false;
-                // `img.range` sekarang dijamin ada karena tipe kita
+            const imageRef = images.find(img => {
+                if (!img.range?.tl) return false;
                 const range = img.range;
                 const isCorrectColumn = range.tl.nativeCol === 9;
                 if (!isCorrectColumn) return false;
-                
-                if (!range.br) {
-                    return (range.tl.nativeRow + 1) === rowNumber;
-                } else {
-                    return rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
-                }
+                if (!range.br) return (range.tl.nativeRow + 1) === rowNumber;
+                return rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
             });
 
-          if (!imageRef) {
-    console.log(`[DEBUG_PHOTO] Baris ${rowNumber} (Nama: ${rowData.fullName}): TIDAK ADA GAMBAR COCOK.`);
-} else {
-    console.log(`[DEBUG_PHOTO] Baris ${rowNumber} (Nama: ${rowData.fullName}): GAMBAR DITEMUKAN (ID: ${imageRef.imageId}).`);
-}
+            // *** PERBAIKAN KRUSIAL #1: SIMPAN imageId ***
+            if (imageRef) {
+                rowData.imageIdToProcess = imageRef.imageId;
+            }
             
             pesertaData.push(rowData);
         });
 
+        const pendampingSheet = workbook.getWorksheet('Data Pendamping');
+        const pendampingData: CompanionRowData[] = [];
         if (pendampingSheet) {
             pendampingSheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
                 if (rowNumber < DATA_START_ROW) return;
@@ -251,23 +239,17 @@ export async function processExcelAction(registrationId: string, filePath: strin
         // --- Tahap 2: Lakukan semua operasi I/O lambat (upload) DI LUAR TRANSAKSI ---
         console.log(`[ACTION_PROCESS_EXCEL] Memulai pra-proses dan upload untuk ${pesertaData.length} peserta.`);
         
-       await Promise.all(pesertaData.map(async (p) => {
+      await Promise.all(pesertaData.map(async (p) => {
             if (p.imageIdToProcess) {
                 const image = workbook.getImage(parseInt(p.imageIdToProcess, 10));
-                if (image && image.buffer) {
+                if (image?.buffer) {
                     const optimizedBuffer = await sharp(image.buffer).resize({ width: 400, height: 600, fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
                     const participantSlug = slugify(p.fullName || `peserta-${p.rowNumber}`);
                     const uniqueFileName = `${participantSlug}_${registrationId}_row_${p.rowNumber}.jpeg`;
                     const photoPath = getPhotoPath(schoolSlug, uniqueFileName);
-                    
-                    const { error: uploadError } = await supabaseAdmin.storage.from('registrations').upload(photoPath, optimizedBuffer, { contentType: 'image/jpeg', upsert: true });
-                    
-                    if (uploadError) {
-                        console.error(`Gagal upload foto untuk peserta ${p.fullName}:`, uploadError.message);
-                        p.photoPath = null;
-                    } else {
-                        p.photoPath = photoPath;
-                    }
+                    const { error } = await supabaseAdmin.storage.from('registrations').upload(photoPath, optimizedBuffer, { contentType: 'image/jpeg', upsert: true });
+                    if (error) console.error(`Gagal upload foto untuk ${p.fullName}:`, error.message);
+                    else p.photoPath = photoPath;
                 }
             }
         }));
@@ -376,19 +358,20 @@ export async function processExcelAction(registrationId: string, filePath: strin
 export async function reserveTentsAction(
     registrationId: string, 
     reservations: { tentTypeId: number, quantity: number }[]
-): Promise<{ success: boolean; message: string; expiresAt?: string }> {
+): Promise<{ success: boolean; message: string; data?: { expiresAt?: string, updatedOrder: { tentTypeId: number, quantity: number }[] } }> {
     const RESERVATION_DURATION_MINUTES = 15;
 
-    // Validasi input dasar
     if (!registrationId || !Array.isArray(reservations)) {
         return { success: false, message: 'Input tidak valid.' };
     }
 
     try {
-        // Logika validasi kapasitas berlebih (dibandingkan total peserta)
         const registration = await prisma.registration.findUnique({
             where: { id: registrationId },
-            include: { participants: true, companions: true }
+            include: { 
+                participants: { select: { id: true } }, // Hanya select ID untuk efisiensi
+                companions: { select: { id: true } } 
+            }
         });
         if (!registration) {
             return { success: false, message: 'Pendaftaran tidak ditemukan.' };
@@ -398,7 +381,6 @@ export async function reserveTentsAction(
         const maxCapacityAllowed = totalParticipants > 0 ? totalParticipants + 10 : 0;
         
         let totalCapacityRequested = 0;
-        // Gunakan Promise.all untuk mengambil data tenda secara paralel agar lebih efisien
         const tentTypes = await prisma.tentType.findMany({
             where: { id: { in: reservations.map(r => r.tentTypeId) } }
         });
@@ -417,45 +399,71 @@ export async function reserveTentsAction(
         const expiresAt = new Date(Date.now() + RESERVATION_DURATION_MINUTES * 60 * 1000);
 
         await prisma.$transaction(async (tx) => {
+            // 1. Lepaskan semua reservasi lama untuk pendaftaran ini
             const oldReservations = await tx.tentReservation.findMany({ where: { registrationId } });
             for (const oldRes of oldReservations) {
-                await tx.tentType.update({ where: { id: oldRes.tentTypeId }, data: { stockAvailable: { increment: oldRes.quantity } } });
+                // Kembalikan stok
+                await tx.tentType.update({ 
+                    where: { id: oldRes.tentTypeId }, 
+                    data: { stockAvailable: { increment: oldRes.quantity } } 
+                });
             }
+            // Hapus record reservasi lama
             await tx.tentReservation.deleteMany({ where: { registrationId } });
 
+            // 2. Buat reservasi baru
             for (const res of reservations) {
-                if (res.quantity === 0) continue;
+                if (res.quantity === 0) continue; // Lewati jika kuantitas 0
+                
+                // Ambil stok dan kurangi
                 await tx.tentType.update({
                     where: { id: res.tentTypeId, stockAvailable: { gte: res.quantity } },
                     data: { stockAvailable: { decrement: res.quantity } },
                 });
+
+                // Buat record reservasi baru
                 await tx.tentReservation.create({
                     data: { registrationId, tentTypeId: res.tentTypeId, quantity: res.quantity, expiresAt },
                 });
             }
 
+            // 3. Hitung dan update total biaya tenda di pendaftaran
             const newTentCost = reservations.reduce((acc, res) => {
-            if (res.quantity > 0) {
-                const tentType = tentTypes.find(t => t.id === res.tentTypeId);
-                return acc + (tentType?.price || 0) * res.quantity;
-            }
-            return acc;
-        }, 0); 
+                if (res.quantity > 0) {
+                    const tentType = tentTypes.find(t => t.id === res.tentTypeId);
+                    return acc + (tentType?.price || 0) * res.quantity;
+                }
+                return acc;
+            }, 0); 
             
             await tx.registration.update({ where: { id: registrationId }, data: { totalCostTenda: newTentCost } });
         });
 
-        return { success: true, message: 'Reservasi tenda berhasil diperbarui.', expiresAt: expiresAt.toISOString() };
+        // 4. Ambil data reservasi terbaru untuk dikirim kembali ke frontend
+        const newReservations = await prisma.tentReservation.findMany({
+            where: { registrationId },
+            select: { tentTypeId: true, quantity: true }
+        });
+
+        return { 
+            success: true, 
+            message: 'Reservasi tenda berhasil diperbarui.', 
+            data: { 
+                expiresAt: expiresAt.toISOString(), 
+                updatedOrder: newReservations 
+            } 
+        };
 
     } catch (error: unknown) {
         let errorMessage = 'Gagal melakukan reservasi tenda.';
+        // Tangani error spesifik dari Prisma jika stok tidak cukup
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025') {
             errorMessage = 'Stok tenda tidak mencukupi untuk jumlah yang diminta.';
         } else if (error instanceof Error) {
             errorMessage = error.message;
         }
         
-        console.error('[RESERVE_TENT_ERROR]', error);
+        console.error('[RESERVE_TENT_ACTION_ERROR]', error);
         return { success: false, message: errorMessage };
     }
 }
@@ -826,8 +834,7 @@ function generateOrderId(schoolName: string): string {
   const month = new Date().toLocaleString('id-ID', { month: 'short' }).toUpperCase();
   const year = new Date().getFullYear();
   const schoolPart = slugify(schoolName).substring(0, 15).toUpperCase();
-  
-  return `${schoolPart}${timestamp}/PP-PMICJR/${month}/${year}`;
+  return `${schoolPart}-${timestamp}/PP-PMICJR/${month}/${year}`;
 }
 
 export async function submitRegistrationAction(registrationId: string, formData: FormData): Promise<{ success: boolean; message: string; orderId?: string }> {
@@ -837,7 +844,6 @@ export async function submitRegistrationAction(registrationId: string, formData:
         return { success: false, message: 'Bukti pembayaran wajib diunggah.' };
     }
 
-    // Ambil data draf yang ada untuk validasi awal
     const registration = await prisma.registration.findFirst({ 
         where: { id: registrationId, status: 'DRAFT' } 
     });
@@ -847,10 +853,10 @@ export async function submitRegistrationAction(registrationId: string, formData:
     }
 
     const schoolSlug = slugify(registration.schoolNameNormalized);
-    const orderId = generateOrderId(registration.schoolName); // Generate ID di awal
+    const orderId = generateOrderId(registration.schoolName);
 
     try {
-        // --- Langkah 1: Upload bukti pembayaran (Operasi I/O) ---
+        // --- Langkah 1: Upload bukti pembayaran (Operasi I/O Kritis) ---
         const proofPath = `temp/${schoolSlug}/payment_proofs/${Date.now()}_${paymentProof.name}`;
         
         const { error: uploadError } = await supabaseAdmin.storage
@@ -862,7 +868,6 @@ export async function submitRegistrationAction(registrationId: string, formData:
         }
 
         // --- Langkah 2: Update Database menjadi SUBMITTED (Operasi Kritis) ---
-        // Ini adalah langkah paling penting. Jika ini berhasil, pendaftaran dianggap masuk.
         await prisma.registration.update({
             where: { id: registrationId },
             data: {
@@ -881,12 +886,10 @@ export async function submitRegistrationAction(registrationId: string, formData:
     }
 
     // --- Langkah 3: Buat Kwitansi PDF (Operasi Tambahan, Tidak Kritis) ---
-    // Kita bungkus ini dalam try...catch terpisah. Jika ini gagal,
-    // pendaftaran tetap dianggap sukses.
+    // Dibungkus dalam try...catch terpisah. Jika ini gagal, pendaftaran tetap dianggap sukses.
     try {
         console.log(`[ACTION] Membuat kwitansi PDF untuk: ${registrationId}`);
         
-        // Ambil data terbaru yang dibutuhkan untuk kwitansi dalam satu query
         const dataForReceipt = await prisma.registration.findUnique({
             where: { id: registrationId },
             select: {
@@ -898,7 +901,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
                 totalCostPendamping: true,
                 totalCostTenda: true,
                 grandTotal: true,
-                _count: { // Gunakan _count untuk efisiensi
+                _count: {
                     select: {
                         participants: true,
                         companions: true,
@@ -916,6 +919,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
         const logoPath = path.join(process.cwd(), 'jobs', 'assets', 'logo-pmi.png');
         const logoPngBytes = await fs.readFile(logoPath);
+
 
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
@@ -1015,10 +1019,11 @@ export async function submitRegistrationAction(registrationId: string, formData:
         // --- Simpan PDF ---
          const pdfBytes = await pdfDoc.save();
         
-        const safeOrderId = (dataForReceipt.customOrderId || `REG-${dataForReceipt.id}`).replace(/\//g, '_');
+        const safeOrderId = (orderId).replace(/\//g, '_');
         const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeOrderId}.pdf`;
 
-        await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
+        const { error: receiptUploadError } = await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
+        if (receiptUploadError) throw new Error(`Gagal mengunggah kwitansi: ${receiptUploadError.message}`);
 
         await prisma.registration.update({
             where: { id: registrationId },
@@ -1026,15 +1031,13 @@ export async function submitRegistrationAction(registrationId: string, formData:
         });
 
         console.log(`[ACTION] Kwitansi PDF untuk ${registrationId} berhasil dibuat.`);
-
     } catch (error: unknown) {
-        // Jika HANYA pembuatan PDF yang gagal
+        // Jika HANYA pembuatan PDF yang gagal, log error tapi jangan gagalkan pendaftaran
         console.error(`[SUBMIT_REGISTRATION_PDF_ERROR] Gagal membuat kwitansi untuk ${registrationId}, tetapi pendaftaran tetap berhasil:`, error);
-        // Tidak perlu mengembalikan error ke pengguna, karena pendaftaran utama sudah berhasil.
     }
 
-    // Selalu kembalikan sukses jika langkah kritis berhasil
-    return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi sedang diproses.', orderId };
+    // Selalu kembalikan sukses jika langkah kritis (update DB) berhasil
+    return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi akan segera tersedia.', orderId };
 }
 
 export async function deleteRegistrationAction(registrationId: string): Promise<ActionResult> {
