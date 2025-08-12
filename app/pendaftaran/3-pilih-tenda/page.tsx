@@ -27,7 +27,7 @@ export default function PilihTendaPage() {
     const [totalParticipants, setTotalParticipants] = useState(0);
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
-    const [debugMessage, setDebugMessage] = useState('');
+    const [, setDebugMessage] = useState('');
 
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
@@ -56,12 +56,17 @@ export default function PilihTendaPage() {
                 const totalPeople = summaryResult.data.participantSummary.count + summaryResult.data.companionSummary.count;
                 setTotalParticipants(totalPeople);
                 setDebugMessage('Data berhasil dimuat.');
-            } catch (error: any) {
-                toast.error(error.message);
-                setDebugMessage(`Error: ${error.message}`);
-            } finally {
-                setIsLoading(false);
-            }
+            } catch (error: unknown) {
+    if (error instanceof Error) {
+        toast.error(error.message);
+        setDebugMessage(`Error: ${error.message}`);
+    } else {
+        toast.error("Terjadi kesalahan yang tidak diketahui.");
+        setDebugMessage("Terjadi kesalahan yang tidak diketahui.");
+    }
+} finally {
+    setIsLoading(false);
+}
         }
         
         fetchInitialData(id);

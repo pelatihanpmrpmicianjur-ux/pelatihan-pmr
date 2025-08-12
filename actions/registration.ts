@@ -6,7 +6,6 @@ import { revalidatePath } from 'next/cache';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { supabaseAdmin } from '@/lib/supabase/server';
-import { registrationQueue } from '@/lib/queue';
 import { slugify } from '@/lib/utils';
 import { Registration, Participant, Companion, TentBooking, TentReservation, TentType } from '@prisma/client';
 import ExcelJS from 'exceljs';
@@ -1062,9 +1061,6 @@ export async function deleteRegistrationAction(registrationId: string): Promise<
         });
 
         // 3. Masukkan job ke antrian untuk menghapus file-file di storage
-        await registrationQueue.add('delete-registration', {
-            schoolNameNormalized: registrationToDelete.schoolNameNormalized
-        });
 
         // Revalidate path dashboard dan halaman data lainnya
         revalidatePath('/admin/dashboard');

@@ -3,7 +3,7 @@
 const nextConfig = {
   // Tambahkan ini agar middleware bisa bekerja dengan benar
   experimental: {
-    serverComponentsExternalPackages: ['bcrypt', 'bcryptjs'],
+   serverExternalPackages: ['bcrypt', 'bcryptjs'],
   },
   images: {
     remotePatterns: [
