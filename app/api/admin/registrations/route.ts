@@ -5,11 +5,11 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 
 export async function GET(request: Request) {
-    // 1. Lindungi endpoint dengan memeriksa sesi admin
-    const session = await getServerSession(authOptions);
-    if (!session || !(session.user as any)?.id) {
-        return NextResponse.json({ message: 'Akses Ditolak' }, { status: 401 });
+   const session = await getServerSession(authOptions);
+    if (!session) {
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
+
 
     try {
         // 2. Ambil semua data pendaftaran dari database
