@@ -10,7 +10,11 @@ import { registrationQueue } from '@/lib/queue';
 import { slugify } from '@/lib/utils';
 import { Registration, Participant, Companion, TentBooking, TentReservation, TentType } from '@prisma/client';
 import ExcelJS from 'exceljs';
+import path from 'path';
 import sharp from 'sharp';
+import qrcode from 'qrcode';
+import fs from 'fs/promises';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 // Definisikan tipe untuk hasil (return value) dari action
 type ActionResult = {
     success: boolean;
@@ -612,12 +616,14 @@ export async function getReceiptUrlAction(registrationId: string): Promise<Recei
 }
 
 
-export async function confirmRegistrationAction(registrationId: string): Promise<ActionResult> {
+export async function confirmRegistrationAction(registrationId: string): Promise<{ success: boolean; message: string; }> {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-        return { success: false, message: 'Unauthorized' };
+    // Di next-auth v5, session.user.id mungkin tidak ada, tergantung callback.
+    // Gunakan pengecekan yang lebih aman.
+    const adminId = (session?.user as any)?.id;
+    if (!adminId) {
+        return { success: false, message: 'Akses ditolak. Anda harus login sebagai admin.' };
     }
-    const adminId = session.user.id;
 
     try {
         const registration = await prisma.registration.findFirst({
@@ -625,24 +631,160 @@ export async function confirmRegistrationAction(registrationId: string): Promise
         });
         
         if (!registration) {
-            return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid.' };
+            return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid untuk dikonfirmasi.' };
         }
         
-        await registrationQueue.add('finalize-registration', { 
-            registrationId, 
-            adminId 
-        });
+        console.log(`[ACTION] Memulai finalisasi (sinkron, paralel) untuk: ${registrationId}`);
+        const schoolSlug = slugify(registration.schoolNameNormalized);
+        const permanentPaths = {
+            excelPath: null as string | null,
+            paymentProofPath: null as string | null,
+            photosPath: null as string | null,
+            receiptPath: null as string | null,
+        };
 
-        await prisma.registration.update({
-            where: { id: registrationId },
-            data: { status: 'DRAFT' } // Gunakan DRAFT sebagai status "processing"
+        const allPromises: Promise<any>[] = [];
+        
+        // --- Siapkan semua "janji" (Promise) untuk dieksekusi secara paralel ---
+
+        // Janji untuk memindahkan File Excel
+        if (registration.excelTempPath) {
+            const fileName = path.basename(registration.excelTempPath);
+            const toPath = `permanen/${schoolSlug}/excel/${fileName}`;
+            allPromises.push(
+                supabaseAdmin.storage.from('registrations').move(registration.excelTempPath, toPath)
+                    .then(({ error }) => {
+                        if (error) {
+                            console.error(`Gagal memindahkan Excel: ${error.message}`);
+                        } else {
+                            permanentPaths.excelPath = toPath;
+                        }
+                    })
+            );
+        }
+
+        // Janji untuk memindahkan Bukti Bayar
+        if (registration.paymentProofTempPath) {
+            const fileName = path.basename(registration.paymentProofTempPath);
+            const toPath = `permanen/${schoolSlug}/payment_proofs/${fileName}`;
+            allPromises.push(
+                supabaseAdmin.storage.from('registrations').move(registration.paymentProofTempPath, toPath)
+                    .then(({ error }) => {
+                        if (error) {
+                            console.error(`Gagal memindahkan Bukti Bayar: ${error.message}`);
+                        } else {
+                            permanentPaths.paymentProofPath = toPath;
+                        }
+                    })
+            );
+        }
+        
+        // Janji untuk memindahkan Kwitansi
+        if (registration.receiptTempPath) {
+            const fileName = path.basename(registration.receiptTempPath);
+            const toPath = `permanen/${schoolSlug}/receipts/${fileName}`;
+            allPromises.push(
+                supabaseAdmin.storage.from('registrations').move(registration.receiptTempPath, toPath)
+                    .then(({ error }) => {
+                        if (error) {
+                            console.error(`Gagal memindahkan Kwitansi: ${error.message}`);
+                        } else {
+                            permanentPaths.receiptPath = toPath;
+                        }
+                    })
+            );
+        }
+
+        // Janji untuk memindahkan Foto & Update Path Peserta
+        const tempPhotoDir = `temp/${schoolSlug}/photos/`;
+        const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
+
+        if (photoFiles && photoFiles.length > 0) {
+            permanentPaths.photosPath = `permanen/${schoolSlug}/photos/`;
+            for (const file of photoFiles) {
+                const fromPath = `${tempPhotoDir}${file.name}`;
+                const toPath = `${permanentPaths.photosPath}${file.name}`;
+                
+                // Tambahkan janji untuk memindahkan file fisik, yang kemudian
+                // akan memicu janji untuk update path di database.
+                allPromises.push(
+                    supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
+                        .then(({ error }) => {
+                            if (!error) {
+                                // Jika pemindahan berhasil, kembalikan janji untuk update DB
+                                return prisma.participant.updateMany({
+                                    where: { photoPath: fromPath },
+                                    data: { photoPath: toPath }
+                                });
+                            } else {
+                                console.error(`Gagal memindahkan foto ${fromPath}: ${error.message}`);
+                            }
+                        })
+                );
+            }
+        }
+        
+        // Jalankan SEMUA operasi I/O secara bersamaan
+        console.log(`[ACTION] Menjalankan ${allPromises.length} operasi I/O secara paralel...`);
+        await Promise.all(allPromises);
+        console.log(`[ACTION] Semua operasi I/O selesai.`);
+
+        // Lakukan Transaksi Database Final (ini sudah cepat)
+        await prisma.$transaction(async (tx) => {
+            // Update tabel Registration utama dengan path permanen dan status
+            await tx.registration.update({
+                where: { id: registrationId },
+                data: {
+                    status: 'CONFIRMED',
+                    excelPath: permanentPaths.excelPath,
+                    paymentProofPath: permanentPaths.paymentProofPath,
+                    photosPath: permanentPaths.photosPath,
+                    receiptPath: permanentPaths.receiptPath,
+                    excelTempPath: null,
+                    paymentProofTempPath: null,
+                    receiptTempPath: null,
+                }
+            });
+            
+            // Buat audit log untuk tindakan konfirmasi
+            await tx.auditLog.create({
+                data: { 
+                    action: 'REGISTRATION_CONFIRMED', 
+                    actorId: adminId, 
+                    targetRegistrationId: registrationId, 
+                    details: { message: 'Pendaftaran dikonfirmasi via Server Action.' } 
+                }
+            });
+            
+            // Ubah reservasi tenda menjadi booking permanen
+            const reservations = await tx.tentReservation.findMany({ where: { registrationId } });
+            if (reservations.length > 0) {
+                await tx.tentBooking.createMany({ 
+                    data: reservations.map(r => ({ 
+                        registrationId: r.registrationId, 
+                        tentTypeId: r.tentTypeId, 
+                        quantity: r.quantity 
+                    })) 
+                });
+                await tx.tentReservation.deleteMany({ where: { registrationId } });
+            }
         });
         
-        return { success: true, message: 'Proses konfirmasi telah dimulai.' };
-
-    } catch (error) {
-        console.error("Failed to enqueue finalization job:", error);
-        return { success: false, message: 'Gagal memulai proses konfirmasi.' };
+        console.log(`[ACTION] Finalisasi (sinkron, paralel) untuk ${registrationId} selesai.`);
+        
+        // Revalidate path agar data di-refresh di sisi klien
+        revalidatePath('/admin/dashboard');
+        revalidatePath(`/admin/registrations/${registrationId}`);
+        revalidatePath('/admin/participants');
+        revalidatePath('/admin/companions');
+        revalidatePath('/admin/tents');
+        
+        return { success: true, message: 'Pendaftaran berhasil dikonfirmasi.' };
+    } catch (error: unknown) {
+        let errorMessage = 'Gagal mengkonfirmasi pendaftaran.';
+        if (error instanceof Error) errorMessage = error.message;
+        console.error(`[CONFIRM_REGISTRATION_ACTION_ERROR] for ${registrationId}:`, error);
+        return { success: false, message: errorMessage };
     }
 }
 
@@ -678,6 +820,186 @@ export async function rejectRegistrationAction(registrationId: string, reason: s
     }
 }
 
+function generateOrderId(schoolName: string): string {
+  const timestamp = new Date().getTime();
+  const month = new Date().toLocaleString('id-ID', { month: 'short' }).toUpperCase();
+  const year = new Date().getFullYear();
+  const schoolPart = slugify(schoolName).substring(0, 15).toUpperCase();
+  
+  return `${schoolPart}${timestamp}/PP-PMICJR/${month}/${year}`;
+}
+
+export async function submitRegistrationAction(registrationId: string, formData: FormData): Promise<{ success: boolean; message: string; orderId?: string }> {
+    const paymentProof = formData.get('paymentProof') as File;
+
+    if (!paymentProof) {
+        return { success: false, message: 'Bukti pembayaran wajib diunggah.' };
+    }
+
+    const registration = await prisma.registration.findFirst({ 
+        where: { id: registrationId, status: 'DRAFT' } 
+    });
+
+    if (!registration) {
+        return { success: false, message: 'Pendaftaran tidak ditemukan atau sudah disubmit.' };
+    }
+
+    try {
+        // --- Upload bukti pembayaran ---
+        const schoolSlug = slugify(registration.schoolNameNormalized);
+        const proofPath = `temp/${schoolSlug}/payment_proofs/${Date.now()}_${paymentProof.name}`;
+        
+        const { error: uploadError } = await supabaseAdmin.storage
+            .from('registrations')
+            .upload(proofPath, paymentProof, { upsert: true });
+
+        if (uploadError) {
+            throw new Error(`Gagal mengunggah bukti pembayaran: ${uploadError.message}`);
+        }
+
+        // --- Update DB ---
+        const orderId = generateOrderId(registration.schoolName);
+        await prisma.registration.update({
+            where: { id: registrationId },
+            data: {
+                status: 'SUBMITTED',
+                customOrderId: orderId,
+                paymentProofTempPath: proofPath,
+            }
+        });
+
+        // --- Generate PDF kwitansi ---
+        console.log(`[ACTION] Membuat kwitansi PDF untuk: ${registrationId}`);
+
+        const APP_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const verificationUrl = `${APP_URL}/verifikasi/${registration.id}`;
+
+        // QR Code
+        const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
+        const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
+
+        // Logo
+        const logoPath = path.join(process.cwd(), 'jobs', 'assets', 'logo-pmi.png');
+        const logoPngBytes = await fs.readFile(logoPath);
+
+        // PDF setup
+        const pdfDoc = await PDFDocument.create();
+        const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
+        const { height: A5_HEIGHT } = page.getSize();
+
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const logoImage = await pdfDoc.embedPng(logoPngBytes);
+        const qrImage = await pdfDoc.embedPng(qrCodePngBytes);
+
+        // Warna
+        const pmiRed = rgb(0.86, 0.15, 0.18);
+        const textBlack = rgb(0.07, 0.07, 0.07);
+        const textGray = rgb(0.45, 0.45, 0.45);
+        const white = rgb(1, 1, 1);
+
+        const margin = 40;
+
+        // --- Header ---
+        const headerHeight = 80;
+        page.drawRectangle({ x: 0, y: A5_HEIGHT - headerHeight, width: 595.28, height: headerHeight, color: pmiRed });
+
+        const logoSize = 56;
+        page.drawRectangle({ x: margin, y: A5_HEIGHT - headerHeight + 12, width: logoSize, height: logoSize, color: white });
+        const logoDims = logoImage.scale(0.08);
+        page.drawImage(logoImage, {
+            x: margin + (logoSize - logoDims.width) / 2,
+            y: A5_HEIGHT - headerHeight + (logoSize - logoDims.height) / 2 + 12,
+            width: logoDims.width,
+            height: logoDims.height
+        });
+
+        page.drawText("KWITANSI", { x: margin + logoSize + 20, y: A5_HEIGHT - 38, font: boldFont, size: 22, color: white });
+        page.drawText("Pendaftaran PMR Kab. Cianjur 2025", { x: margin + logoSize + 20, y: A5_HEIGHT - 55, font: font, size: 10, color: rgb(0.9, 0.9, 0.9) });
+
+        page.drawText("No. Order", { x: 430, y: A5_HEIGHT - 30, font: font, size: 8, color: white });
+        page.drawText(registration.customOrderId || '-', { x: 430, y: A5_HEIGHT - 45, font: boldFont, size: 10, color: white });
+
+        // --- Info Sekolah & Tanggal ---
+        page.drawText("DITERIMA DARI", { x: margin, y: A5_HEIGHT - 110, font: font, size: 10, color: textGray });
+        page.drawText(registration.schoolNameNormalized, { x: margin, y: A5_HEIGHT - 125, font: boldFont, size: 14, color: textBlack });
+
+        page.drawText("TANGGAL PEMBAYARAN", { x: 350, y: A5_HEIGHT - 110, font: font, size: 10, color: textGray });
+        page.drawText(new Date(registration.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }), {
+            x: 350,
+            y: A5_HEIGHT - 125,
+            font: boldFont,
+            size: 14,
+            color: textBlack
+        });
+
+        // --- Tabel Biaya ---
+        let startY = A5_HEIGHT - 160;
+        const rowHeight = 20;
+
+        const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')},-`;
+         const participantCount = await prisma.participant.count({
+        where: { registrationId: registration.id }
+         });
+        const companionCount = await prisma.companion.count({
+            where: { registrationId: registration.id }
+        });
+         const rows = [
+        ["Biaya Pendaftaran Peserta", `${participantCount} orang`, formatCurrency(registration.totalCostPeserta)],
+        ...(companionCount > 0 ? [["Biaya Pendaftaran Pendamping", `${companionCount} orang`, formatCurrency(registration.totalCostPendamping)]] : []),
+        ...(registration.totalCostTenda > 0 ? [["Sewa Tenda", "-", formatCurrency(registration.totalCostTenda)]] : []),
+    ];
+
+        rows.forEach(([desc, qty, subtotal]) => {
+            page.drawText(desc, { x: margin, y: startY, font: font, size: 10, color: textBlack });
+            page.drawText(qty, { x: 300, y: startY, font: font, size: 10, color: textGray });
+            page.drawText(subtotal, { x: 470, y: startY, font: font, size: 10, color: textBlack });
+            startY -= rowHeight;
+        });
+
+        // --- Total ---
+        page.drawText("Total Dibayar", { x: 350, y: startY - 10, font: boldFont, size: 12, color: textBlack });
+        page.drawText(formatCurrency(registration.grandTotal), { x: 470, y: startY - 10, font: boldFont, size: 14, color: pmiRed });
+
+        // --- Footer ---
+        page.drawRectangle({ x: 0, y: 0, width: 595.28, height: 70, color: rgb(0.98, 0.98, 0.98) });
+
+        page.drawText("LUNAS", { x: margin, y: 40, font: boldFont, size: 14, color: rgb(0.1, 0.5, 0.2) });
+        page.drawText("Kwitansi ini valid dan diterbitkan secara digital oleh sistem pendaftaran PMR Cianjur 2025", {
+            x: margin,
+            y: 25,
+            font: font,
+            size: 8,
+            color: textGray
+        });
+
+        const qrDims = qrImage.scale(0.3);
+        page.drawImage(qrImage, { x: 500, y: 10, width: qrDims.width, height: qrDims.height });
+        page.drawText("Scan untuk Verifikasi", { x: 500, y: 5, font: font, size: 6, color: textGray });
+
+        // --- Simpan PDF ---
+        const pdfBytes = await pdfDoc.save();
+        const safeOrderId = (orderId || `REG-${registration.id}`).replace(/\//g, '_');
+        const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeOrderId}.pdf`;
+
+        const { error: receiptUploadError } = await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
+        if (receiptUploadError) throw new Error(`Gagal mengunggah kwitansi: ${receiptUploadError.message}`);
+
+        await prisma.registration.update({
+            where: { id: registrationId },
+            data: { receiptTempPath: receiptPath },
+        });
+
+        console.log(`[ACTION] Kwitansi PDF untuk ${registrationId} berhasil dibuat.`);
+        return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi telah dibuat.', orderId };
+
+    } catch (error: unknown) {
+        let errorMessage = "Gagal mengirim pendaftaran.";
+        if (error instanceof Error) errorMessage = error.message;
+        console.error('[SUBMIT_REGISTRATION_ACTION_ERROR]', error);
+        return { success: false, message: errorMessage };
+    }
+}
 // ==========================================================
 // === AKSI BARU: DELETE REGISTRATION ===
 // ==========================================================
