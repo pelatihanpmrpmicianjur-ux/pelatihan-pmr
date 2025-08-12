@@ -26,24 +26,19 @@ export default function LoginForm() {
 
     try {
         const result = await signIn('credentials', {
-            redirect: false,
             username,
             password,
-            callbackUrl,
+            callbackUrl: `${callbackUrl}?login_success=true`,
         });
-
         if (result?.error) {
             toast.error('Login Gagal. Periksa kembali username dan password Anda.');
             setIsLoading(false);
-        } else if (result?.ok) {
-            toast.success('Login berhasil!');
-            router.push(callbackUrl);
         }
     } catch (error) {
         setIsLoading(false);
         toast.error('Terjadi kesalahan yang tidak terduga.');
     }
-  };
+};
 
   return (
     <Card className="w-full max-w-md">
