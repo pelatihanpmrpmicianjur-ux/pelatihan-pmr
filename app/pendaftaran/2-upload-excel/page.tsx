@@ -48,6 +48,9 @@ export default function UploadExcelPage() {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
 
+    const APP_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const excelTemplate = `${APP_URL}/Template_Data_Peserta(ganti dengan nama sekolah).xlsx`;
+    
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
@@ -168,8 +171,8 @@ export default function UploadExcelPage() {
                 <h1 className="text-3xl font-bold mb-2">Langkah 2: Upload Data Peserta</h1>
                 <p className="text-muted-foreground max-w-2xl mx-auto">
                     Seret atau pilih file Excel sesuai template yang telah disediakan.
-                    <a href="/template-peserta.xlsx" className="text-red-600 hover:underline font-semibold ml-1" download>Unduh template.</a>
-                </p>
+                    <a href={excelTemplate} className="text-red-600 hover:underline font-semibold ml-1" download>Unduh template.</a>
+                </p> 
             </div>
             
             <AnimatePresence mode="wait">
