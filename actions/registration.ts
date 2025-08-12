@@ -324,16 +324,28 @@ export async function processExcelAction(registrationId: string, filePath: strin
         console.log(`[ACTION_PROCESS_EXCEL] Transaksi database selesai.`);
 
         const previewPesertaForClient = pesertaData.map(p => ({
-            rowNumber: p.rowNumber,
-            fullName: p.fullName,
-            birthInfo: p.birthInfo,
+                        rowNumber: p.rowNumber,
+                        fullName: p.fullName,
+                        birthInfo: p.birthInfo,
+                        address: p.address,
+                        religion: p.religion,
+                        bloodType: p.bloodType,
+                        entryYear: p.entryYear,
+                        phone: p.phone,
+                        gender: p.gender,
             photoPath: p.photoPath,
         }));
         
         const previewPendampingForClient = pendampingData.map(p => ({
-            rowNumber: p.rowNumber,
-            fullName: p.fullName,
-            birthInfo: p.birthInfo,
+                        rowNumber: p.rowNumber,
+                        fullName: p.fullName,
+                        birthInfo: p.birthInfo,
+                        address: p.address,
+                        religion: p.religion,
+                        bloodType: p.bloodType,
+                        entryYear: p.entryYear,
+                        phone: p.phone,
+                        gender: p.gender,
         }));
     
         return {
