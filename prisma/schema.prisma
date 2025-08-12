@@ -1,0 +1,144 @@
+// File: prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// Status pendaftaran: draft, submitted, rejected, confirmed
+enum RegistrationStatus {
+  DRAFT      // Pendaftaran sedang diisi, belum selesai
+  SUBMITTED  // Pembayaran sudah dilakukan, menunggu verifikasi admin
+  CONFIRMED  // Dikonfirmasi oleh admin, pendaftaran selesai
+  REJECTED   // Ditolak oleh admin
+}
+
+model Registration {
+  id                   String             @id @default(cuid())
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  status               RegistrationStatus @default(DRAFT) 
+  
+  schoolName           String
+  schoolNameNormalized String
+  coachName            String?            // Opsional selama DRAFT
+  coachPhone           String?            // Opsional selama DRAFT
+  schoolCategory       String?            // Opsional selama DRAFT
+
+  participants         Participant[]
+  companions           Companion[]
+  tentBookings         TentBooking[]      // Tetap terhubung ke sini
+  tentReservations     TentReservation[]  // Tetap terhubung ke sini
+
+  totalCostPeserta     Int                @default(0)
+  totalCostPendamping  Int                @default(0)
+  totalCostTenda       Int                @default(0)
+  grandTotal           Int                @default(0)
+
+  excelTempPath        String?
+  paymentProofTempPath String?
+  receiptTempPath      String?
+  
+  excelPath            String?
+  photosPath           String?
+  paymentProofPath     String?
+  receiptPath          String?
+  
+  rejectionReason      String?
+  customOrderId        String?            @unique // Opsional, baru dibuat saat SUBMIT
+
+  auditLogs            AuditLog[]
+
+  @@unique([schoolNameNormalized, status], name: "unique_school_per_status")
+}
+
+
+model Participant {
+  id             String       @id @default(cuid())
+  registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  
+  rowNumber      Int?
+  fullName       String
+  birthInfo      String
+  address        String
+  religion       String
+  bloodType      String?
+  entryYear      Int
+  phone          String?
+  gender         String
+  photoPath      String?      // URL ke foto di Supabase Storage setelah di-upload
+}
+
+model Companion {
+  id             String       @id @default(cuid())
+  registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  rowNumber      Int?
+  fullName       String
+  birthInfo      String
+  address        String
+  religion       String
+  bloodType      String?
+  entryYear      Int
+  phone          String?
+  gender         String       // "L" atau "P"
+}
+
+model TentType {
+  id             Int      @id @default(autoincrement())
+  capacity       Int      @unique
+  price          Int
+  stockInitial   Int
+  stockAvailable Int
+  
+  tentBookings     TentBooking[]
+  tentReservations TentReservation[]
+}
+
+model TentBooking {
+  id             String       @id @default(cuid())
+   registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  
+  tentTypeId     Int
+  tentType       TentType     @relation(fields: [tentTypeId], references: [id])
+  quantity       Int
+}
+
+// Tabel untuk menahan stok tenda sementara
+model TentReservation {
+  id             String       @id @default(cuid())
+  registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  
+  tentTypeId     Int
+  tentType       TentType     @relation(fields: [tentTypeId], references: [id])
+  quantity       Int
+  expiresAt      DateTime
+}
+
+model AuditLog {
+  id                   String       @id @default(cuid())
+  timestamp            DateTime     @default(now())
+  actorId              String?      // ID admin atau "system"
+  action               String       // "CONFIRM_REGISTRATION", "MOVE_FILES", dll.
+  
+  targetRegistrationId String
+  registration         Registration @relation(fields: [targetRegistrationId], references: [id], onDelete: Cascade)
+  
+  details              Json?        // Detail tambahan, mis: { from: "...", to: "..." }
+}
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String   // Akan disimpan dalam bentuk hash
+  createdAt DateTime @default(now())
+}
