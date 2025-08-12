@@ -11,7 +11,18 @@ import { Loader2, ArrowRight, ArrowLeft, School, Users, Tent } from 'lucide-reac
 import { motion } from 'framer-motion';
 import { BackgroundGradient } from '@/components/ui/background-gradient'; // Impor dari Aceternity UI
 import { getSummaryAction } from '@/actions/registration';
+import { type TentType } from '@prisma/client';
 
+type ExcelSummaryCache = {
+    schoolInfo: { schoolName: string | null; coachName: string | null; coachPhone: string | null; schoolCategory: string | null; };
+    pesertaCount: number;
+    pendampingCount: number;
+};
+type TentOrderCache = {
+    tentTypeId: number;
+    quantity: number;
+};
+// --- Peringatan #1 diperbaiki di sini: gunakan `BuiltSummaryData` ---
 type BuiltSummaryData = {
     schoolInfo: { schoolName: string | null; coachName: string | null; coachPhone: string | null; schoolCategory: string | null; };
     participantSummary: { count: number; };
@@ -43,80 +54,84 @@ const Section = ({ icon: Icon, title, children }: { icon: React.ElementType, tit
 );
 
 export default function RingkasanPage() {
-    const router = useRouter();
-    const [summary, setSummary] = useState<BuiltSummaryData | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  // --- PERBAIKAN: Berikan tipe eksplisit pada state ---
+  const [summary, setSummary] = useState<BuiltSummaryData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-        setIsLoading(true);
-        const registrationId = localStorage.getItem('registrationId');
-        if (!registrationId) {
-            toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
-            router.push('/pendaftaran/1-data-sekolah');
-            return;
+  useEffect(() => {
+    setIsLoading(true);
+    const registrationId = localStorage.getItem('registrationId');
+    if (!registrationId) {
+        toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
+        router.push('/pendaftaran/1-data-sekolah');
+        return;
+    }
+
+    try {
+        const cachedSummaryJSON = localStorage.getItem(`summary_${registrationId}`);
+        const cachedTentOrderJSON = localStorage.getItem(`tent_order_${registrationId}`);
+        
+        if (!cachedSummaryJSON) {
+            throw new Error("Data pendaftaran tidak ditemukan. Harap ulangi langkah upload Excel.");
         }
 
-        try {
-            // 1. Ambil data dari cache
-            const cachedSummaryJSON = localStorage.getItem(`summary_${registrationId}`);
-            const cachedTentOrderJSON = localStorage.getItem(`tent_order_${registrationId}`);
-            
-            if (!cachedSummaryJSON) {
-                throw new Error("Data pendaftaran tidak ditemukan. Harap ulangi langkah upload Excel.");
-            }
-
-            const excelSummary = JSON.parse(cachedSummaryJSON);
-            const tentOrder = cachedTentOrderJSON ? JSON.parse(cachedTentOrderJSON) : [];
-            
-            // Di sini kita perlu data lengkap tentang tipe tenda untuk menghitung biaya
-            // Jadi, satu-satunya panggilan API yang kita butuhkan adalah ke /api/tents
-            fetch('/api/tents')
-                .then(res => res.json())
-                .then(tentTypes => {
-                    const tentSummary = tentOrder.filter((item: any) => item.quantity > 0).map((item: any) => {
-                        const type = tentTypes.find((t: any) => t.id === item.tentTypeId);
+        const excelSummary: ExcelSummaryCache = JSON.parse(cachedSummaryJSON);
+        const tentOrder: TentOrderCache[] = cachedTentOrderJSON ? JSON.parse(cachedTentOrderJSON) : [];
+        
+        // Ambil data tipe tenda dari API
+        fetch('/api/tents')
+            .then(res => res.json())
+            .then((tentTypes: TentType[]) => { // Berikan tipe TentType[] pada hasil fetch
+                
+                // --- PERBAIKAN: Berikan tipe eksplisit pada `item` dan `t` ---
+                const tentSummary = tentOrder
+                    .filter((item: TentOrderCache) => item.quantity > 0)
+                    .map((item: TentOrderCache) => {
+                        const type = tentTypes.find((t: TentType) => t.id === item.tentTypeId);
                         return {
-                            capacity: type.capacity,
+                            capacity: type?.capacity || 0,
                             quantity: item.quantity,
-                            price: type.price,
-                            subtotal: type.price * item.quantity,
+                            price: type?.price || 0,
+                            subtotal: (type?.price || 0) * item.quantity,
                         };
                     });
 
-                    const costTenda = tentSummary.reduce((sum: number, t: any) => sum + t.subtotal, 0);
-                    const costPeserta = excelSummary.pesertaCount * 40000;
-                    const costPendamping = excelSummary.pendampingCount * 25000;
-                    const grandTotal = costPeserta + costPendamping + costTenda;
-                    
-                    const fullSummary: BuiltSummaryData = {
-                        schoolInfo: excelSummary.schoolInfo, // Asumsi processExcelAction mengembalikan ini
-                        participantSummary: { count: excelSummary.pesertaCount },
-                        companionSummary: { count: excelSummary.pendampingCount },
-                        tentSummary: tentSummary,
-                        costSummary: {
-                            peserta: costPeserta,
-                            pendamping: costPendamping,
-                            tenda: costTenda,
-                            grandTotal: grandTotal,
-                        }
-                    };
+                const costTenda = tentSummary.reduce((sum: number, t) => sum + t.subtotal, 0);
+                const costPeserta = excelSummary.pesertaCount * 40000;
+                const costPendamping = excelSummary.pendampingCount * 25000;
+                const grandTotal = costPeserta + costPendamping + costTenda;
+                
+                const fullSummary: BuiltSummaryData = {
+                    schoolInfo: excelSummary.schoolInfo,
+                    participantSummary: { count: excelSummary.pesertaCount },
+                    companionSummary: { count: excelSummary.pendampingCount },
+                    tentSummary: tentSummary,
+                    costSummary: {
+                        peserta: costPeserta,
+                        pendamping: costPendamping,
+                        tenda: costTenda,
+                        grandTotal: grandTotal,
+                    }
+                };
+                
+                setSummary(fullSummary);
+                localStorage.setItem(`payment_total_${registrationId}`, grandTotal.toString());
+            })
+            .catch((error: unknown) => { // Tangani error dari fetch
+                 const message = error instanceof Error ? error.message : "Gagal memuat detail tenda.";
+                 toast.error(message);
+            });
 
-                    setSummary(fullSummary);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Gagal membangun ringkasan.";
+        toast.error(message);
+        router.push('/pendaftaran/2-upload-excel');
+    } finally {
+        setIsLoading(false);
+    }
 
-                    // Simpan grandTotal untuk halaman pembayaran
-                    localStorage.setItem(`payment_total_${registrationId}`, grandTotal.toString());
-                });
-
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Gagal membangun ringkasan.";
-            toast.error(message);
-            router.push('/pendaftaran/2-upload-excel'); // Arahkan ke langkah yang relevan
-        } finally {
-            setIsLoading(false);
-        }
-
-    }, [router]);
-
+  }, [router]);
    if (isLoading) return <div className="p-8 text-center"><Loader2 className="h-8 w-8 animate-spin mx-auto" /></div>;
    if (!summary) return <div className="p-8 text-center text-red-500">Gagal memuat data. Silakan kembali dan coba lagi.</div>;
   const { schoolInfo, costSummary, participantSummary, companionSummary, tentSummary } = summary;
