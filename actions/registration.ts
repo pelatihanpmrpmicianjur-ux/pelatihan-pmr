@@ -929,7 +929,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         if (!dataForReceipt) throw new Error("Data pendaftaran tidak ditemukan untuk membuat kwitansi.");
 
-        const APP_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const APP_URL = process.env.NEXTAUTH_URL;
         const verificationUrl = `${APP_URL}/verifikasi/${dataForReceipt.id}`;
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });

@@ -48,7 +48,7 @@ export default function UploadExcelPage() {
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
 
-    const APP_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const APP_URL = process.env.NEXTAUTH_URL;
     const excelTemplate = `${APP_URL}/Template_Data_Peserta(ganti dengan nama sekolah).xlsx`;
     
     useEffect(() => {
