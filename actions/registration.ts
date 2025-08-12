@@ -1035,7 +1035,6 @@ export async function submitRegistrationAction(registrationId: string, formData:
         // Jika HANYA pembuatan PDF yang gagal, log error tapi jangan gagalkan pendaftaran
         console.error(`[SUBMIT_REGISTRATION_PDF_ERROR] Gagal membuat kwitansi untuk ${registrationId}, tetapi pendaftaran tetap berhasil:`, error);
     }
-
     // Selalu kembalikan sukses jika langkah kritis (update DB) berhasil
     return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi akan segera tersedia.', orderId };
 }
