@@ -1,18 +1,17 @@
-// File: tsconfig.worker.json
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "CommonJS",
-    // --- TAMBAHKAN BARIS INI UNTUK MENYELESAIKAN KONFLIK ---
     "moduleResolution": "node",
-    // --------------------------------------------------------
-    "outDir": "dist",
+    "outDir": "./dist", // Pastikan ini menunjuk ke folder 'dist'
     "noEmit": false,
-    "jsx": "react" 
+    "jsx": "react"
   },
   "include": [
-    "jobs/**/*.ts",
-    "jobs/**/*.tsx" 
-    
+    "jobs/**/*.ts",      // Sertakan semua file .ts di dalam 'jobs'
+    "jobs/**/*.tsx"      // Sertakan semua file .tsx di dalam 'jobs'
+  ],
+  "exclude": [
+      "node_modules"
   ]
 }

@@ -7,7 +7,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { registrationQueue } from '@/lib/queue';
-import { slugify, normalizeSchoolName } from '@/lib/utils';
+import { slugify } from '@/lib/utils';
 import { Registration, Participant, Companion, TentBooking, TentReservation, TentType } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import sharp from 'sharp';

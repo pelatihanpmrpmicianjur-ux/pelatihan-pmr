@@ -77,32 +77,83 @@ export default function PilihTendaPage() {
     // ====================================================================
     // === PERBAIKAN UTAMA DI SINI ===
     // ====================================================================
+   const handleQuantityChange = (tentTypeId: number, change: number) => {
+        // Log #1: Konfirmasi bahwa event klik diterima
+        console.log(`[handleQuantityChange] Tombol diklik. Mengubah kuantitas untuk tenda ID: ${tentTypeId}, perubahan: ${change}`);
+        
+        setOrder(currentOrder => {
+            const newOrder = currentOrder.map(item => {
+                if (item.tentTypeId === tentTypeId) {
+                    const newQuantity = item.quantity + change;
+                    // Pastikan kuantitas tidak pernah di bawah 0
+                    return { ...item, quantity: Math.max(0, newQuantity) };
+                }
+                return item;
+            });
+
+            // Log #2: Tampilkan state `order` yang baru sebelum di-set
+            // Ini akan muncul segera setelah klik.
+            console.log('[handleQuantityChange] State `order` yang baru akan di-set:', JSON.stringify(newOrder, null, 2));
+            return newOrder;
+        });
+    };
+
+    // Fungsi ini dipanggil oleh `useEffect` setelah `debouncedOrder` berubah
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
-      // Periksa regId yang diteruskan sebagai argumen
+      // Log #3: Konfirmasi bahwa fungsi ini dipicu setelah debounce
+      console.log(`[updateReservation] Fungsi dipicu. ID Registrasi: ${regId}`);
+      console.log('[updateReservation] Order yang akan dikirim ke server:', JSON.stringify(currentOrder, null, 2));
+
+      // Guard clause untuk mencegah panggilan jika ID belum siap
       if (!regId) {
-          console.log("updateReservation dibatalkan: tidak ada registrationId.");
+          console.warn("[updateReservation] Dibatalkan: registrationId masih null atau undefined.");
           return;
       }
+      
+      // Simpan order saat ini ke localStorage sebagai backup
       localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
+      
+      // Set state loading untuk memberikan feedback visual
       setIsUpdating(true);
       
-      const result = await reserveTentsAction(regId, currentOrder);
-      
-      if (!result.success) {
-          toast.error(result.message);
-          // Jika stok tidak cukup, refresh data tenda dari server
-          if (result.message.includes("Stok tenda tidak mencukupi")) {
-              const res = await fetch('/api/tents');
-              if (res.ok) {
-                const updatedTents = await res.json();
-                setTentTypes(updatedTents);
-              }
-          }
-      }
-      setIsUpdating(false);
-    }, []); // <-- Hapus semua dependensi dari useCallback
+      try {
+          // Log #4: Tepat sebelum memanggil Server Action
+          console.log("[updateReservation] Memanggil Server Action 'reserveTentsAction'...");
+          
+          const result = await reserveTentsAction(regId, currentOrder);
+          
+          // Log #5: Tampilkan hasil yang diterima dari Server Action
+          console.log("[updateReservation] Hasil diterima dari 'reserveTentsAction':", result);
 
-    useEffect(() => {
+          if (!result.success) {
+              // Jika gagal, tampilkan toast error yang deskriptif
+              toast.error(`Error dari server: ${result.message}`);
+
+              // Jika error karena stok, coba segarkan data stok tenda
+              if (result.message.includes("Stok tenda tidak mencukupi")) {
+                  console.log("[updateReservation] Error stok terdeteksi, mencoba menyegarkan data tenda...");
+                  const res = await fetch('/api/tents');
+                  if (res.ok) {
+                    const updatedTents = await res.json();
+                    setTentTypes(updatedTents);
+                    console.log("[updateReservation] Data tenda berhasil disegarkan.");
+                  }
+              }
+          } else {
+              // Jika berhasil, beri feedback positif
+              toast.success("Reservasi berhasil diperbarui!");
+          }
+      } catch (error) {
+          // Tangani jika Server Action itu sendiri melempar error (jarang terjadi jika ditangani dengan baik)
+          console.error("[updateReservation] Terjadi error saat memanggil Server Action:", error);
+          toast.error("Terjadi kesalahan tak terduga saat menghubungi server.");
+      } finally {
+          // Pastikan state loading selalu dimatikan, baik berhasil maupun gagal
+          setIsUpdating(false);
+      }
+    }, []);
+
+ useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
@@ -113,18 +164,6 @@ export default function PilihTendaPage() {
 
     }, [debouncedOrder, registrationId, updateReservation]); // <-- `registrationId` sekarang menjadi dependensi
     // ====================================================================
-
-    const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => 
-            currentOrder.map(item => {
-                if (item.tentTypeId === tentTypeId) {
-                    const newQuantity = item.quantity + change;
-                    return { ...item, quantity: Math.max(0, newQuantity) };
-                }
-                return item;
-            })
-        );
-    };
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
         const totalCap = order.reduce((acc, item) => {
