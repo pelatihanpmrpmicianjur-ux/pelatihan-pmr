@@ -935,9 +935,18 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-        const logoPath = path.resolve(process.cwd(), 'public', 'logo-pmi.png');
-            const logoPngBytes = await fs.readFile(logoPath);
-
+        const logoPath = path.resolve(process.cwd(), 'logo-pmi.png');
+    
+    // Sebagai jaring pengaman, coba kedua lokasi (untuk kompatibilitas lokal dan Vercel)
+    let logoPngBytes;
+    try {
+        logoPngBytes = await fs.readFile(logoPath);
+    } catch (e) {
+        // Jika gagal (mungkin di env lokal yang strukturnya berbeda), coba path `public/`
+        console.warn("Gagal membaca logo dari root, mencoba dari 'public/'...");
+        const fallbackLogoPath = path.resolve(process.cwd(), 'public', 'logo-pmi.png');
+        logoPngBytes = await fs.readFile(fallbackLogoPath);
+    }
 
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
