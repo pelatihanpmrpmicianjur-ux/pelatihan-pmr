@@ -7,6 +7,7 @@
   "build": "prisma generate && next build",
   "start": "next start",
   "lint": "next lint",
+  "db:seed": "ts-node --compiler-options '{\"module\": \"CommonJS\"}' prisma/seed.ts",
   "worker:dev": "ts-node-dev --respawn --project tsconfig.worker.json jobs/worker.ts",
   "build:worker": "pnpm prisma generate && npx tsc --project tsconfig.worker.json",
   "start:worker": "node dist/jobs/worker.js"
