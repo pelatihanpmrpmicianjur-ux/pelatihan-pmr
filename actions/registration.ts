@@ -222,10 +222,11 @@ export async function processExcelAction(registrationId: string, filePath: strin
                 }
             });
 
-            if (imageRef) {
-                // Simpan imageId (yang merupakan string) untuk diproses nanti
-                rowData.imageIdToProcess = imageRef.imageId;
-            }
+          if (!imageRef) {
+    console.log(`[DEBUG_PHOTO] Baris ${rowNumber} (Nama: ${rowData.fullName}): TIDAK ADA GAMBAR COCOK.`);
+} else {
+    console.log(`[DEBUG_PHOTO] Baris ${rowNumber} (Nama: ${rowData.fullName}): GAMBAR DITEMUKAN (ID: ${imageRef.imageId}).`);
+}
             
             pesertaData.push(rowData);
         });
@@ -836,6 +837,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
         return { success: false, message: 'Bukti pembayaran wajib diunggah.' };
     }
 
+    // Ambil data draf yang ada untuk validasi awal
     const registration = await prisma.registration.findFirst({ 
         where: { id: registrationId, status: 'DRAFT' } 
     });
@@ -844,9 +846,11 @@ export async function submitRegistrationAction(registrationId: string, formData:
         return { success: false, message: 'Pendaftaran tidak ditemukan atau sudah disubmit.' };
     }
 
+    const schoolSlug = slugify(registration.schoolNameNormalized);
+    const orderId = generateOrderId(registration.schoolName); // Generate ID di awal
+
     try {
-        // --- Upload bukti pembayaran ---
-        const schoolSlug = slugify(registration.schoolNameNormalized);
+        // --- Langkah 1: Upload bukti pembayaran (Operasi I/O) ---
         const proofPath = `temp/${schoolSlug}/payment_proofs/${Date.now()}_${paymentProof.name}`;
         
         const { error: uploadError } = await supabaseAdmin.storage
@@ -857,8 +861,8 @@ export async function submitRegistrationAction(registrationId: string, formData:
             throw new Error(`Gagal mengunggah bukti pembayaran: ${uploadError.message}`);
         }
 
-        // --- Update DB ---
-        const orderId = generateOrderId(registration.schoolName);
+        // --- Langkah 2: Update Database menjadi SUBMITTED (Operasi Kritis) ---
+        // Ini adalah langkah paling penting. Jika ini berhasil, pendaftaran dianggap masuk.
         await prisma.registration.update({
             where: { id: registrationId },
             data: {
@@ -868,25 +872,56 @@ export async function submitRegistrationAction(registrationId: string, formData:
             }
         });
 
-        // --- Generate PDF kwitansi ---
+    } catch (error: unknown) {
+        // Jika langkah kritis (upload bukti bayar atau update DB) gagal, seluruh aksi gagal.
+        let errorMessage = "Gagal memproses pendaftaran.";
+        if (error instanceof Error) errorMessage = error.message;
+        console.error('[SUBMIT_REGISTRATION_CRITICAL_ERROR]', error);
+        return { success: false, message: errorMessage };
+    }
+
+    // --- Langkah 3: Buat Kwitansi PDF (Operasi Tambahan, Tidak Kritis) ---
+    // Kita bungkus ini dalam try...catch terpisah. Jika ini gagal,
+    // pendaftaran tetap dianggap sukses.
+    try {
         console.log(`[ACTION] Membuat kwitansi PDF untuk: ${registrationId}`);
+        
+        // Ambil data terbaru yang dibutuhkan untuk kwitansi dalam satu query
+        const dataForReceipt = await prisma.registration.findUnique({
+            where: { id: registrationId },
+            select: {
+                id: true,
+                createdAt: true,
+                schoolNameNormalized: true,
+                customOrderId: true,
+                totalCostPeserta: true,
+                totalCostPendamping: true,
+                totalCostTenda: true,
+                grandTotal: true,
+                _count: { // Gunakan _count untuk efisiensi
+                    select: {
+                        participants: true,
+                        companions: true,
+                    }
+                }
+            }
+        });
+
+        if (!dataForReceipt) throw new Error("Data pendaftaran tidak ditemukan untuk membuat kwitansi.");
 
         const APP_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-        const verificationUrl = `${APP_URL}/verifikasi/${registration.id}`;
+        const verificationUrl = `${APP_URL}/verifikasi/${dataForReceipt.id}`;
 
-        // QR Code
         const qrCodeImage = await qrcode.toDataURL(verificationUrl, { errorCorrectionLevel: 'H', margin: 1 });
         const qrCodePngBytes = Buffer.from(qrCodeImage.split(',')[1], 'base64');
-
-        // Logo
         const logoPath = path.join(process.cwd(), 'jobs', 'assets', 'logo-pmi.png');
         const logoPngBytes = await fs.readFile(logoPath);
 
-        // PDF setup
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([595.28, 419.53]); // A5 Landscape
-        const { height: A5_HEIGHT } = page.getSize();
+        const { width: A5_WIDTH, height: A5_HEIGHT } = page.getSize();
 
+        // Setup font dan gambar
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
         const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
         const logoImage = await pdfDoc.embedPng(logoPngBytes);
@@ -978,12 +1013,12 @@ export async function submitRegistrationAction(registrationId: string, formData:
         page.drawText("Scan untuk Verifikasi", { x: 500, y: 5, font: font, size: 6, color: textGray });
 
         // --- Simpan PDF ---
-        const pdfBytes = await pdfDoc.save();
-        const safeOrderId = (orderId || `REG-${registration.id}`).replace(/\//g, '_');
+         const pdfBytes = await pdfDoc.save();
+        
+        const safeOrderId = (dataForReceipt.customOrderId || `REG-${dataForReceipt.id}`).replace(/\//g, '_');
         const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeOrderId}.pdf`;
 
-        const { error: receiptUploadError } = await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
-        if (receiptUploadError) throw new Error(`Gagal mengunggah kwitansi: ${receiptUploadError.message}`);
+        await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
 
         await prisma.registration.update({
             where: { id: registrationId },
@@ -991,18 +1026,17 @@ export async function submitRegistrationAction(registrationId: string, formData:
         });
 
         console.log(`[ACTION] Kwitansi PDF untuk ${registrationId} berhasil dibuat.`);
-        return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi telah dibuat.', orderId };
 
     } catch (error: unknown) {
-        let errorMessage = "Gagal mengirim pendaftaran.";
-        if (error instanceof Error) errorMessage = error.message;
-        console.error('[SUBMIT_REGISTRATION_ACTION_ERROR]', error);
-        return { success: false, message: errorMessage };
+        // Jika HANYA pembuatan PDF yang gagal
+        console.error(`[SUBMIT_REGISTRATION_PDF_ERROR] Gagal membuat kwitansi untuk ${registrationId}, tetapi pendaftaran tetap berhasil:`, error);
+        // Tidak perlu mengembalikan error ke pengguna, karena pendaftaran utama sudah berhasil.
     }
+
+    // Selalu kembalikan sukses jika langkah kritis berhasil
+    return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi sedang diproses.', orderId };
 }
-// ==========================================================
-// === AKSI BARU: DELETE REGISTRATION ===
-// ==========================================================
+
 export async function deleteRegistrationAction(registrationId: string): Promise<ActionResult> {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
