@@ -1,83 +1,115 @@
 // File: app/admin/dashboard/page.tsx
-'use client';
+// Perhatikan: Tidak ada 'use client'; di sini, ini adalah Server Component
 
-import { useState, useEffect } from "react";
-import { type RegistrationStatus } from "@prisma/client";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge"; // npx shadcn-ui@latest add badge
+import { Badge } from "@/components/ui/badge";
+import { prisma } from "@/lib/db";
+import { RegistrationStatus } from "@prisma/client";
 
+// Definisikan tipe data yang kita ambil, meskipun tidak digunakan
+// oleh state, ini baik untuk kejelasan.
 type RegistrationListItem = {
     id: string;
-    createdAt: string;
+    createdAt: Date; // Prisma mengembalikan objek Date
     status: RegistrationStatus;
     schoolName: string;
-    coachName: string;
+    coachName: string | null;
     grandTotal: number;
     customOrderId: string | null;
 }
 
-const statusVariant: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = {
+// Objek untuk memetakan status ke varian visual dari Badge
+const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = {
     DRAFT: 'outline',
     SUBMITTED: 'secondary',
     CONFIRMED: 'default',
     REJECTED: 'destructive',
 };
 
-export default function DashboardPage() {
-    const [registrations, setRegistrations] = useState<RegistrationListItem[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
+const statusTextMap: { [key in RegistrationStatus]: string } = {
+    DRAFT: 'Draft / Belum Selesai',
+    SUBMITTED: 'Menunggu Konfirmasi',
+    CONFIRMED: 'Terkonfirmasi',
+    REJECTED: 'Ditolak',
+};
 
-    useEffect(() => {
-        async function fetchData() {
-            try {
-                const response = await fetch('/api/admin/registrations');
-                const data = await response.json();
-                setRegistrations(data);
-            } catch (error) {
-                console.error(error);
-            } finally {
-                setIsLoading(false);
-            }
+
+// Komponen halaman sekarang adalah fungsi ASYNC
+export default async function DashboardPage() {
+    
+    // Langsung panggil Prisma untuk mengambil data di server saat request.
+    // Error handling untuk query ini akan ditangkap oleh error boundary Next.js.
+    const registrations: RegistrationListItem[] = await prisma.registration.findMany({
+        orderBy: {
+            createdAt: 'desc',
+        },
+        select: {
+            id: true,
+            createdAt: true,
+            status: true,
+            schoolName: true,
+            coachName: true,
+            grandTotal: true,
+            customOrderId: true,
         }
-        fetchData();
-    }, []);
-
-    if (isLoading) return <p>Loading data pendaftaran...</p>;
+    });
 
     return (
-        <div>
-            <h2 className="text-2xl font-bold mb-4">Daftar Pendaftaran Masuk</h2>
-            <div className="bg-white rounded-lg shadow">
-                <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th className="p-4">ID Pesanan</th>
-                            <th className="p-4">Nama Sekolah</th>
-                            <th className="p-4">Tanggal Daftar</th>
-                            <th className="p-4">Total Biaya</th>
-                            <th className="p-4">Status</th>
-                            <th className="p-4">Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {registrations.map(reg => (
-                            <tr key={reg.id} className="border-b">
-                                <td className="p-4 font-mono text-xs">{reg.customOrderId || '-'}</td>
-                                <td className="p-4 font-semibold">{reg.schoolName}</td>
-                                <td className="p-4">{new Date(reg.createdAt).toLocaleDateString('id-ID')}</td>
-                                <td className="p-4">Rp {reg.grandTotal.toLocaleString('id-ID')}</td>
-                                <td className="p-4">
-                                    <Badge variant={statusVariant[reg.status]}>{reg.status}</Badge>
-                                </td>
-                                <td className="p-4">
-                                    <Link href={`/admin/registrations/${reg.id}`} className="text-blue-600 hover:underline">
-                                        Lihat Detail
-                                    </Link>
-                                </td>
+        <div className="space-y-6">
+            <h2 className="text-3xl font-bold tracking-tight">Dashboard Pendaftaran Masuk</h2>
+            <div className="bg-white rounded-lg shadow-md border border-gray-200">
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-xs text-gray-700 uppercase">
+                            <tr>
+                                <th scope="col" className="px-6 py-3">ID Pesanan</th>
+                                <th scope="col" className="px-6 py-3">Nama Sekolah</th>
+                                <th scope="col" className="px-6 py-3">Tanggal Daftar</th>
+                                <th scope="col" className="px-6 py-3 text-right">Total Biaya</th>
+                                <th scope="col" className="px-6 py-3 text-center">Status</th>
+                                <th scope="col" className="px-6 py-3 text-center">Aksi</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {registrations.length === 0 ? (
+                                <tr className="bg-white border-b">
+                                    <td colSpan={6} className="text-center p-8 text-gray-500">
+                                        Belum ada pendaftaran yang masuk.
+                                    </td>
+                                </tr>
+                            ) : (
+                                registrations.map(reg => (
+                                    <tr key={reg.id} className="bg-white border-b hover:bg-gray-50">
+                                        <td className="px-6 py-4 font-mono text-xs text-gray-600">
+                                            {reg.customOrderId || '-'}
+                                        </td>
+                                        <td scope="row" className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">
+                                            {reg.schoolName}
+                                        </td>
+                                        <td className="px-6 py-4 text-gray-600">
+                                            {new Date(reg.createdAt).toLocaleDateString('id-ID', {
+                                                day: 'numeric', month: 'long', year: 'numeric'
+                                            })}
+                                        </td>
+                                        <td className="px-6 py-4 font-medium text-gray-800 text-right">
+                                            Rp {reg.grandTotal.toLocaleString('id-ID')}
+                                        </td>
+                                        <td className="px-6 py-4 text-center">
+                                            <Badge variant={statusVariantMap[reg.status]}>
+                                                {statusTextMap[reg.status]}
+                                            </Badge>
+                                        </td>
+                                        <td className="px-6 py-4 text-center">
+                                            <Link href={`/admin/registrations/${reg.id}`} className="font-medium text-red-600 hover:underline">
+                                                Lihat Detail
+                                            </Link>
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );
