@@ -104,8 +104,19 @@ export default function UploadExcelPage() {
             return;
         }
 
-        setUploadState('processing');
-        setSummary(null);
+        const processResult = await processExcelAction(registrationId, urlResult.path);
+        if (!processResult.success) {
+            throw new Error(processResult.message || "Gagal memproses file di server.");
+        }
+
+        // --- SIMPAN SUMMARY KE CACHE ---
+        if (processResult.summary && registrationId) {
+            const cachedSummaryKey = `summary_${registrationId}`;
+            localStorage.setItem(cachedSummaryKey, JSON.stringify(processResult.summary));
+        }
+
+        setSummary(processResult.summary);
+        setUploadState('success');
         setErrorMessage(null);
         const toastId = toast.loading("Memulai proses...");
 

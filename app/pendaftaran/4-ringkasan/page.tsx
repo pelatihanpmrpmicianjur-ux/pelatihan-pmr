@@ -12,14 +12,23 @@ import { motion } from 'framer-motion';
 import { BackgroundGradient } from '@/components/ui/background-gradient'; // Impor dari Aceternity UI
 import { getSummaryAction } from '@/actions/registration';
 
+type BuiltSummaryData = {
+    schoolInfo: { schoolName: string | null; coachName: string | null; coachPhone: string | null; schoolCategory: string | null; };
+    participantSummary: { count: number; };
+    companionSummary: { count: number; };
+    tentSummary: { capacity: number; quantity: number; price: number; subtotal: number; }[];
+    costSummary: { peserta: number; pendamping: number; tenda: number; grandTotal: number; };
+};
+
 type SummaryData = Awaited<ReturnType<typeof getSummaryAction>>['data'];
 
 const SummaryItem = ({ label, value }: { label: string, value: string | number | null }) => (
-    <div className="flex justify-between items-center py-2">
+    <div className="flex justify-between items-start py-2">
         <p className="text-muted-foreground">{label}</p>
-        <p className="font-semibold">{value || '-'}</p>
+        <p className="font-semibold text-right break-words">{value || '-'}</p>
     </div>
 );
+
 
 const Section = ({ icon: Icon, title, children }: { icon: React.ElementType, title: string, children: React.ReactNode }) => (
     <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}>
@@ -34,51 +43,82 @@ const Section = ({ icon: Icon, title, children }: { icon: React.ElementType, tit
 );
 
 export default function RingkasanPage() {
-  const router = useRouter();
-  const [summary, setSummary] = useState<SummaryData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+    const router = useRouter();
+    const [summary, setSummary] = useState<BuiltSummaryData | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const registrationId = localStorage.getItem('registrationId');
-
-    // Guard Clause #1: Hentikan semua jika tidak ada ID
-    if (!registrationId) {
-      toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
-      router.push('/pendaftaran/1-data-sekolah');
-      return;
-    }
-
-    // Fungsi fetch yang hanya akan dipanggil dengan ID yang valid
-    async function fetchSummary(regId: string) {
-      setIsLoading(true);
-      try {
-        // Panggilan ini sekarang dijamin aman karena `regId` adalah `string`
-        const result = await getSummaryAction(regId);
-        if (!result.success || !result.data) {
-            throw new Error(result.message);
+    useEffect(() => {
+        setIsLoading(true);
+        const registrationId = localStorage.getItem('registrationId');
+        if (!registrationId) {
+            toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
+            router.push('/pendaftaran/1-data-sekolah');
+            return;
         }
-        setSummary(result.data);
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-            toast.error(error.message);
-        } else {
-            toast.error("Gagal memuat ringkasan pendaftaran.");
-        }
-        // Jika gagal, mungkin arahkan pengguna kembali
-        router.push('/pendaftaran/3-pilih-tenda');
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    
-    // Panggil fungsi dengan ID yang kita tahu adalah string
-    fetchSummary(registrationId);
 
-  }, [router]);
+        try {
+            // 1. Ambil data dari cache
+            const cachedSummaryJSON = localStorage.getItem(`summary_${registrationId}`);
+            const cachedTentOrderJSON = localStorage.getItem(`tent_order_${registrationId}`);
+            
+            if (!cachedSummaryJSON) {
+                throw new Error("Data pendaftaran tidak ditemukan. Harap ulangi langkah upload Excel.");
+            }
+
+            const excelSummary = JSON.parse(cachedSummaryJSON);
+            const tentOrder = cachedTentOrderJSON ? JSON.parse(cachedTentOrderJSON) : [];
+            
+            // Di sini kita perlu data lengkap tentang tipe tenda untuk menghitung biaya
+            // Jadi, satu-satunya panggilan API yang kita butuhkan adalah ke /api/tents
+            fetch('/api/tents')
+                .then(res => res.json())
+                .then(tentTypes => {
+                    const tentSummary = tentOrder.filter((item: any) => item.quantity > 0).map((item: any) => {
+                        const type = tentTypes.find((t: any) => t.id === item.tentTypeId);
+                        return {
+                            capacity: type.capacity,
+                            quantity: item.quantity,
+                            price: type.price,
+                            subtotal: type.price * item.quantity,
+                        };
+                    });
+
+                    const costTenda = tentSummary.reduce((sum: number, t: any) => sum + t.subtotal, 0);
+                    const costPeserta = excelSummary.pesertaCount * 40000;
+                    const costPendamping = excelSummary.pendampingCount * 25000;
+                    const grandTotal = costPeserta + costPendamping + costTenda;
+                    
+                    const fullSummary: BuiltSummaryData = {
+                        schoolInfo: excelSummary.schoolInfo, // Asumsi processExcelAction mengembalikan ini
+                        participantSummary: { count: excelSummary.pesertaCount },
+                        companionSummary: { count: excelSummary.pendampingCount },
+                        tentSummary: tentSummary,
+                        costSummary: {
+                            peserta: costPeserta,
+                            pendamping: costPendamping,
+                            tenda: costTenda,
+                            grandTotal: grandTotal,
+                        }
+                    };
+
+                    setSummary(fullSummary);
+
+                    // Simpan grandTotal untuk halaman pembayaran
+                    localStorage.setItem(`payment_total_${registrationId}`, grandTotal.toString());
+                });
+
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Gagal membangun ringkasan.";
+            toast.error(message);
+            router.push('/pendaftaran/2-upload-excel'); // Arahkan ke langkah yang relevan
+        } finally {
+            setIsLoading(false);
+        }
+
+    }, [router]);
 
    if (isLoading) return <div className="p-8 text-center"><Loader2 className="h-8 w-8 animate-spin mx-auto" /></div>;
-  if (!summary) return <div className="p-8 text-center text-red-500">Gagal memuat data. Silakan kembali dan coba lagi.</div>;
-  
+   if (!summary) return <div className="p-8 text-center text-red-500">Gagal memuat data. Silakan kembali dan coba lagi.</div>;
   const { schoolInfo, costSummary, participantSummary, companionSummary, tentSummary } = summary;
   
   // Varian untuk animasi stagger

@@ -372,6 +372,26 @@ export async function processExcelAction(registrationId: string, filePath: strin
     }
 }
 
+export async function getTotalParticipantsAction(registrationId: string): Promise<{ success: boolean; total: number; message: string; }> {
+    if (!registrationId) {
+        return { success: false, total: 0, message: "ID Pendaftaran tidak valid." };
+    }
+
+    try {
+        // Gunakan Promise.all untuk menjalankan kedua query count secara paralel
+        const [participantCount, companionCount] = await Promise.all([
+            prisma.participant.count({ where: { registrationId } }),
+            prisma.companion.count({ where: { registrationId } })
+        ]);
+
+        return { success: true, total: participantCount + companionCount, message: "Total berhasil dihitung." };
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Gagal menghitung jumlah peserta.";
+        console.error("[GET_TOTAL_PARTICIPANTS_ERROR]", error);
+        return { success: false, total: 0, message };
+    }
+}
+
 export async function reserveTentsAction(
     registrationId: string, 
     reservations: { tentTypeId: number, quantity: number }[]

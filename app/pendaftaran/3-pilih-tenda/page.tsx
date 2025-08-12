@@ -10,7 +10,8 @@ import { type TentType } from '@prisma/client';
 import { AlertCircle, Tent, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { getSummaryAction, reserveTentsAction } from '@/actions/registration';
+// Impor aksi baru dan hapus yang lama jika tidak diperlukan
+import { reserveTentsAction, getTotalParticipantsAction } from '@/actions/registration';
 
 type TentOrderItem = {
   tentTypeId: number;
@@ -23,11 +24,42 @@ export default function PilihTendaPage() {
     const [tentTypes, setTentTypes] = useState<TentType[]>([]);
     const [order, setOrder] = useState<TentOrderItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [isUpdating, setIsUpdating] = useState(false);
+    // Hapus isUpdating, kita akan menggunakan Optimistic UI
+    // const [isUpdating, setIsUpdating] = useState(false); 
     const [totalParticipants, setTotalParticipants] = useState(0);
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
-    const [, setDebugMessage] = useState('');
+    
+    const fetchInitialData = useCallback(async (regId: string) => {
+        setIsLoading(true);
+        try {
+            const [tentsRes, totalResult] = await Promise.all([
+                fetch('/api/tents'),
+                getTotalParticipantsAction(regId)
+            ]);
+
+            if (!tentsRes.ok) throw new Error('Gagal memuat data tenda.');
+            const tentsData: TentType[] = await tentsRes.json();
+            setTentTypes(tentsData);
+            
+            const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
+            if (cachedOrder) {
+                setOrder(JSON.parse(cachedOrder));
+            } else {
+                setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
+            }
+
+            if (!totalResult.success) {
+                throw new Error(totalResult.message);
+            }
+            setTotalParticipants(totalResult.total);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
+            toast.error(message);
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
@@ -37,86 +69,54 @@ export default function PilihTendaPage() {
             return;
         }
         setRegistrationId(id);
-
-        async function fetchInitialData(regId: string) {
-            setIsLoading(true);
-            try {
-                setDebugMessage('Memuat data tenda...');
-                const tentsRes = await fetch('/api/tents');
-                if (!tentsRes.ok) throw new Error('Gagal memuat data tenda.');
-                const tentsData: TentType[] = await tentsRes.json();
-                setTentTypes(tentsData);
-                setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
-                
-                setDebugMessage('Memuat ringkasan pendaftaran...');
-                const summaryResult = await getSummaryAction(regId);
-                if (!summaryResult.success || !summaryResult.data) {
-                    throw new Error(summaryResult.message);
-                }
-                const totalPeople = summaryResult.data.participantSummary.count + summaryResult.data.companionSummary.count;
-                setTotalParticipants(totalPeople);
-                setDebugMessage('Data berhasil dimuat.');
-            } catch (error: unknown) {
-    if (error instanceof Error) {
-        toast.error(error.message);
-        setDebugMessage(`Error: ${error.message}`);
-    } else {
-        toast.error("Terjadi kesalahan yang tidak diketahui.");
-        setDebugMessage("Terjadi kesalahan yang tidak diketahui.");
-    }
-} finally {
-    setIsLoading(false);
-}
-        }
-        
         fetchInitialData(id);
-    }, [router]);
-
-    // Fungsi ini dipanggil oleh `useEffect` setelah `debouncedOrder` berubah
-     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
+    }, [router, fetchInitialData]);
+  
+    const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
-        
-        console.log('[DEBUG_TENT] Memanggil `updateReservation` dengan order:', currentOrder);
-        setIsUpdating(true);
-        toast.info("Memperbarui reservasi...");
+
+        localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
+
+        // Tampilkan feedback non-blocking
+        const toastId = toast.loading("Menyimpan pilihan...", { duration: 15000 });
 
         const result = await reserveTentsAction(regId, currentOrder);
         
-        console.log('[DEBUG_TENT] Hasil dari `reserveTentsAction`:', result);
+        toast.dismiss(toastId);
 
         if (!result.success) {
-            toast.error(result.message);
+            toast.error(result.message, { duration: 5000 });
+            // Jika gagal, pulihkan state UI ke kondisi terakhir yang valid
+            // dengan mengambil data lagi dari server
+            if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
+                await fetchInitialData(regId);
+            }
         } else {
-            toast.success("Reservasi berhasil diperbarui.");
+            toast.success("Pilihan tenda disimpan.", { duration: 2000 });
         }
-        setIsUpdating(false);
-    }, []);
+    }, [fetchInitialData]);
 
-     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => {
-            const newOrder = currentOrder.map(item => {
-                if (item.tentTypeId === tentTypeId) {
-                    return { ...item, quantity: Math.max(0, item.quantity + change) };
-                }
-                return item;
-            });
-            console.log("[DEBUG_TENT] Order diubah menjadi:", newOrder);
-            return newOrder;
-        });
-    };
-    
-
- useEffect(() => {
+    useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
+        if (registrationId) {
+            updateReservation(debouncedOrder, registrationId);
+        }
+    }, [debouncedOrder, registrationId, updateReservation]);
 
-        // Panggil updateReservation dengan state `registrationId` saat ini
-        updateReservation(debouncedOrder, registrationId);
-
-    }, [debouncedOrder, registrationId, updateReservation]); // <-- `registrationId` sekarang menjadi dependensi
-    // ====================================================================
+    const handleQuantityChange = (tentTypeId: number, change: number) => {
+        setOrder(currentOrder => 
+            currentOrder.map(item => {
+                if (item.tentTypeId === tentTypeId) {
+                    const newQuantity = item.quantity + change;
+                    return { ...item, quantity: Math.max(0, newQuantity) };
+                }
+                return item;
+            })
+        );
+    };
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
         const totalCap = order.reduce((acc, item) => {
@@ -165,9 +165,9 @@ export default function PilihTendaPage() {
                         {tentTypes.map(tent => {
                             const currentOrderItem = order.find(item => item.tentTypeId === tent.id);
                             const currentQuantity = currentOrderItem?.quantity || 0;
-                            const nextTotalCapacity = totalCapacitySelected + tent.capacity;
+                            const nextTotalCapacity = totalCapacitySelected - (currentQuantity * tent.capacity) + ((currentQuantity + 1) * tent.capacity);
                             const wouldExceedCapacity = nextTotalCapacity > maxCapacityAllowed && maxCapacityAllowed > 0;
-                            const isPlusDisabled = isUpdating || currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
+                            const isPlusDisabled = currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
                             return (
                                 <Card key={tent.id} className="transition-all hover:shadow-md">
                                     <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -180,7 +180,7 @@ export default function PilihTendaPage() {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2 flex-shrink-0">
-                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={isUpdating || currentQuantity === 0}>-</Button>
+                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
                                             <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
                                             <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
                                         </div>
@@ -214,7 +214,7 @@ export default function PilihTendaPage() {
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Button size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={() => router.push('/pendaftaran/4-ringkasan')} disabled={isUpdating || isCapacityExceeded}>
+                            <Button size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={() => router.push('/pendaftaran/4-ringkasan')} disabled={isCapacityExceeded}>
                                 Lanjut ke Ringkasan
                             </Button>
                         </div>

@@ -1,3 +1,4 @@
+// File: app/pendaftaran/5-pembayaran/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -7,8 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-// --- Impor SEMUA server actions yang relevan ---
-import { getSummaryAction, getReceiptUrlAction, submitRegistrationAction } from '@/actions/registration';
+import { submitRegistrationAction, getReceiptUrlAction, getSummaryAction } from '@/actions/registration';
 import { Loader2, CheckCircle, Download, Landmark, UserCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -36,38 +36,46 @@ export default function PembayaranPage() {
         }
         setRegistrationId(id);
 
-        async function fetchTotal(regId: string) {
-            try {
-                const result = await getSummaryAction(regId);
-                if (result.success && result.data) {
-                    setGrandTotal(result.data.costSummary.grandTotal);
-                } else {
-                    throw new Error(result.message || "Gagal memuat total biaya.");
-                }
-            } catch (error: unknown) {
-                if (error instanceof Error) {
-                    toast.error(error.message);
-                } else {
-                    toast.error("Terjadi kesalahan saat memuat total biaya.");
+        // Prioritaskan mengambil total dari localStorage untuk kecepatan
+        const savedTotal = localStorage.getItem(`payment_total_${id}`);
+        if (savedTotal) {
+            setGrandTotal(parseInt(savedTotal, 10));
+        } else {
+            // Jika tidak ada di cache (misalnya, pengguna langsung ke URL ini),
+            // ambil dari server sebagai fallback.
+            async function fetchTotal(regId: string) {
+                try {
+                    const result = await getSummaryAction(regId);
+                    if (result.success && result.data) {
+                        setGrandTotal(result.data.costSummary.grandTotal);
+                    } else {
+                        throw new Error(result.message || "Gagal memuat total biaya.");
+                    }
+                } catch (error: unknown) {
+                    const message = error instanceof Error ? error.message : "Terjadi kesalahan";
+                    toast.error(message);
+                    router.push('/pendaftaran/4-ringkasan'); // Arahkan kembali
                 }
             }
+            fetchTotal(id);
         }
-        
-        fetchTotal(id);
     }, [router]);
 
     useEffect(() => {
         if (!isSuccess || !finalRegistrationId) return;
 
+        let attempts = 0;
+        const maxAttempts = 12; // Cek selama 60 detik (12 * 5 detik)
         const interval = setInterval(async () => {
+            attempts++;
             try {
                 const result = await getReceiptUrlAction(finalRegistrationId);
                 if (result.status === 'ready' && result.downloadUrl) {
                     setReceiptUrl(result.downloadUrl);
                     setIsCheckingReceipt(false);
                     clearInterval(interval);
-                } else if (result.status !== 'processing') {
-                    console.error("Gagal mendapatkan kwitansi:", result.message);
+                } else if (result.status !== 'processing' || attempts >= maxAttempts) {
+                    console.error("Gagal mendapatkan kwitansi atau waktu tunggu habis:", result.message);
                     setIsCheckingReceipt(false);
                     clearInterval(interval);
                 }
@@ -88,16 +96,13 @@ export default function PembayaranPage() {
             if (selectedFile.size > MAX_SIZE_MB * 1024 * 1024) {
                 toast.error(`Ukuran file bukti pembayaran tidak boleh melebihi ${MAX_SIZE_MB}MB.`);
                 e.target.value = '';
-                setFile(null); // Juga reset state file
+                setFile(null);
                 return;
             }
             setFile(selectedFile);
         }
     };
     
-    // ======================================================
-    // === PERBAIKAN UTAMA: Gunakan Server Action, bukan fetch ===
-    // ======================================================
     const handleSubmit = async () => {
         if (!file || !registrationId) {
             toast.error("Harap pilih file bukti pembayaran atau sesi tidak valid.");
@@ -110,30 +115,26 @@ export default function PembayaranPage() {
             const formData = new FormData();
             formData.append('paymentProof', file);
 
-            // Panggil Server Action secara langsung
             const data = await submitRegistrationAction(registrationId, formData);
             
             if (!data.success) {
                 throw new Error(data.message);
             }
             
-            // Logika sukses tidak berubah
             setOrderId(data.orderId || '');
             setFinalRegistrationId(registrationId);
             setIsSuccess(true);
             toast.success("Pendaftaran Anda telah berhasil dikirim!", { id: toastId });
             
-            // Pembersihan localStorage
+            // Pembersihan semua item localStorage terkait sesi pendaftaran ini
             localStorage.removeItem('registrationId');
             localStorage.removeItem(`summary_${registrationId}`);
             localStorage.removeItem(`tent_order_${registrationId}`);
+            localStorage.removeItem(`payment_total_${registrationId}`);
 
         } catch (error: unknown) {
-            if (error instanceof Error) {
-                toast.error(error.message, { id: toastId });
-            } else {
-                toast.error("Terjadi kesalahan yang tidak terduga saat mengirim.", { id: toastId });
-            }
+            const message = error instanceof Error ? error.message : "Terjadi kesalahan yang tidak terduga.";
+            toast.error(message, { id: toastId });
         } finally {
             setIsLoading(false);
         }
@@ -188,13 +189,13 @@ export default function PembayaranPage() {
                 <CardDescription>Langkah terakhir. Lakukan pembayaran dan unggah buktinya di sini untuk menyelesaikan pendaftaran.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-8">
-                <div className="p-6 border rounded-lg bg-blue-50 border-blue-200 space-y-4">
+                <div className="p-6 border rounded-lg bg-blue-50/50 border-blue-200 space-y-4">
                     <div>
                         <p className="text-sm font-semibold text-blue-800">Total yang harus dibayar:</p>
                         {grandTotal === null ? (
                             <Skeleton className="h-10 w-48 mt-1" />
                         ) : (
-                            <p className="text-4xl font-bold text-blue-700">Rp {grandTotal.toLocaleString('id-ID')}</p>
+                            <p className="text-4xl font-bold text-blue-700">Rp {grandTotal.toLocaleString('id-ID')},-</p>
                         )}
                     </div>
                     <Separator />
@@ -210,10 +211,10 @@ export default function PembayaranPage() {
                 <div className="space-y-2">
                     <Label htmlFor="payment-proof" className="font-semibold text-base">Upload Bukti Pembayaran</Label>
                     <p className="text-sm text-muted-foreground">Format: JPG, PNG, PDF. Maksimal 5MB.</p>
-                    <Input id="payment-proof" type="file" onChange={handleFileChange} accept="image/*,.pdf" className="pt-2 h-auto"/>
+                    <Input id="payment-proof" type="file" onChange={handleFileChange} accept="image/*,.pdf" className="pt-2 h-auto file:text-red-600 file:font-semibold"/>
                 </div>
             </CardContent>
-            <CardFooter className="flex justify-end">
+            <CardFooter className="flex justify-end bg-slate-50/50 py-4 px-6 rounded-b-lg">
                 <Button size="lg" onClick={handleSubmit} disabled={isLoading || !file || grandTotal === null} className="bg-red-600 hover:bg-red-700">
                     {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Mengirim...</> : "Kirim Pendaftaran & Selesai"}
                 </Button>
@@ -222,7 +223,6 @@ export default function PembayaranPage() {
     );
 }
 
-// Tambahkan komponen Skeleton jika belum ada
 const Skeleton = ({ className }: { className?: string }) => (
     <div className={cn("animate-pulse rounded-md bg-muted", className)} />
 );
