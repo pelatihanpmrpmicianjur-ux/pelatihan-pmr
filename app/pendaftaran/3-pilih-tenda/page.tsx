@@ -22,8 +22,11 @@ export default function PilihTendaPage() {
     const [registrationId, setRegistrationId] = useState<string | null>(null);
     const [tentTypes, setTentTypes] = useState<TentType[]>([]);
     const [order, setOrder] = useState<TentOrderItem[]>([]);
-    const [isLoading, setIsLoading] = useState(true); // Mulai dengan true
     const [totalParticipants, setTotalParticipants] = useState(0);
+    
+    // --- STATE PENGONTROL BARU ---
+    const [pageState, setPageState] = useState<'loading' | 'ready' | 'error'>('loading');
+    
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
 
@@ -34,28 +37,38 @@ export default function PilihTendaPage() {
                 fetch('/api/tents'),
                 getTotalParticipantsAction(regId)
             ]);
+
             if (!tentsRes.ok) throw new Error('Gagal memuat data tenda.');
             const tentsData: TentType[] = await tentsRes.json();
-            if (tentsData.length === 0) throw new Error("Tipe tenda tidak tersedia.");
+            
+            if (tentsData.length === 0) {
+                toast.error("Tipe tenda tidak tersedia.");
+                setPageState('error');
+                return;
+            }
             if (!totalResult.success) throw new Error(totalResult.message);
             
+            // Lakukan semua pembaruan state sekaligus
             setTentTypes(tentsData);
             setTotalParticipants(totalResult.total);
-            
-            if (isInitialMount.current) {
-                const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
-                if (cachedOrder) setOrder(JSON.parse(cachedOrder));
-                else setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
+            const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
+            if (cachedOrder) {
+                setOrder(JSON.parse(cachedOrder));
+            } else {
+                setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
             }
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
-            toast.error(message);
-        } finally {
-            if (isLoading) setIsLoading(false);
-        }
-    }, [isLoading]); // Dependensi useCallback, `isInitialMount.current` akan dibaca saat dipanggil
 
-    // `useEffect` ini HANYA bertanggung jawab untuk memulai pengambilan data awal.
+            // Setelah semua state di-set, baru ubah pageState menjadi 'ready'
+            setPageState('ready');
+
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Terjadi kesalahan.";
+            toast.error(message);
+            setPageState('error');
+        }
+    }, []);
+
+    // `useEffect` ini hanya untuk inisialisasi awal
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
@@ -65,54 +78,41 @@ export default function PilihTendaPage() {
         }
         setRegistrationId(id);
         fetchInitialData(id);
-    }, [router, fetchInitialData]); // `fetchInitialData` sekarang dependensi yang stabil
-
-    // ==============================================================
-    // === `updateReservation` SEKARANG BISA "MELIHAT" `fetchInitialData` ===
-    // ==============================================================
+    }, [router, fetchInitialData]);
+  
+    // `useEffect` untuk update reservasi
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
         localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
-        
         const result = await reserveTentsAction(regId, currentOrder);
-        
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
             if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
-                // Sekarang ini valid karena fetchInitialData ada di scope yang sama
                 await fetchInitialData(regId);
             }
         }
-    }, [fetchInitialData]); // Tambahkan `fetchInitialData` sebagai dependensi di sini juga
+    }, [fetchInitialData]);
 
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
-        if (registrationId) {
-            const toastId = toast.loading("Menyimpan pilihan...");
-            updateReservation(debouncedOrder, registrationId).then(() => {
-                toast.dismiss(toastId);
-            });
+        if (registrationId && pageState === 'ready') {
+            updateReservation(debouncedOrder, registrationId);
         }
-    }, [debouncedOrder, registrationId, updateReservation]);
+    }, [debouncedOrder, registrationId, updateReservation, pageState]);
 
-    // Fungsi handleQuantityChange (instan di UI)
+    // Fungsi `handleQuantityChange`
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        console.log(`[handleQuantityChange] Dipanggil untuk Tenda ID: ${tentTypeId}`);
-        setOrder(currentOrder => {
-            console.log(`[handleQuantityChange] State 'order' sebelumnya:`, currentOrder);
-            const newOrder = currentOrder.map(item => {
+        setOrder(currentOrder => 
+            currentOrder.map(item => {
                 if (item.tentTypeId === tentTypeId) {
-                    const newQuantity = item.quantity + change;
-                    return { ...item, quantity: Math.max(0, newQuantity) };
+                    return { ...item, quantity: Math.max(0, item.quantity + change) };
                 }
                 return item;
-            });
-            console.log(`[handleQuantityChange] State 'order' yang baru:`, newOrder);
-            return newOrder;
-        });
+            })
+        );
     };
 
   
@@ -135,10 +135,19 @@ export default function PilihTendaPage() {
         };
     }, [order, tentTypes, totalParticipants]);
 
-    if (isLoading) {
+    if (pageState === 'loading') {
         return (
             <div className="flex justify-center items-center h-[calc(100vh-200px)]">
                 <Loader2 className="h-10 w-10 animate-spin text-red-600" />
+                <p className="ml-4 text-muted-foreground">Menyiapkan data tenda...</p>
+            </div>
+        );
+    }
+    
+    if (pageState === 'error') {
+        return (
+            <div className="text-center p-8">
+                <p className="text-red-600">Gagal memuat data. Coba muat ulang halaman.</p>
             </div>
         );
     }
