@@ -1,104 +1,44 @@
 // File: app/login/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react'; // Tambahkan useEffect
-import { signIn } from 'next-auth/react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Suspense } from 'react'; // Impor Suspense dari React
+import { motion } from 'framer-motion';
+import LoginForm from '@/components/features/login-form';
+import { Loader2 } from 'lucide-react';
+
+// Buat komponen Fallback untuk ditampilkan selama Suspense
+const LoginFallback = () => {
+    return (
+        <div className="flex flex-col items-center justify-center text-center p-8 bg-white/50 backdrop-blur-sm rounded-lg shadow-lg">
+            <Loader2 className="h-8 w-8 animate-spin text-red-600" />
+            <p className="mt-4 text-muted-foreground">Mempersiapkan form login...</p>
+        </div>
+    );
+};
 
 export default function LoginPage() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') || '/admin/dashboard';
-  
-  // Ambil parameter 'error' dari URL
-  const error = searchParams.get('error');
-
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-
-  // ======================================================
-  // === LOGIKA BARU UNTUK MENAMPILKAN TOAST ERROR ===
-  // ======================================================
-  useEffect(() => {
-    // Pesan error akan dipetakan di sini
-    const errorMessages: { [key: string]: string } = {
-      CredentialsSignin: "Username atau password salah. Silakan coba lagi.",
-      // Tambahkan kode error lain dari next-auth jika perlu
-    };
-
-    if (error && errorMessages[error]) {
-      // Tampilkan toast jika ada error yang kita kenali
-      toast.error(errorMessages[error]);
-
-      // Hapus parameter error dari URL agar tidak muncul lagi saat refresh
-      // menggunakan window.history.replaceState
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, '', newUrl);
-    }
-  }, [error]); // Jalankan effect ini setiap kali parameter 'error' berubah
-  // ======================================================
-
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-
-    // Fungsi signIn tidak perlu diubah. Ia akan secara otomatis
-    // meng-handle redirect dan penambahan parameter error.
-    await signIn('credentials', {
-        username,
-        password,
-        callbackUrl: callbackUrl, // Redirect ke dashboard setelah sukses
-    });
-
-    // Kita tidak perlu lagi setIsLoading(false) di sini karena
-    // halaman akan di-redirect atau di-refresh oleh signIn
-  };
-
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold text-center">Admin Login</CardTitle>
-        </CardHeader>
-        <CardContent>
-            <form onSubmit={handleLogin} className="space-y-6">
-            <div>
-                <Label htmlFor="username">Username</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  placeholder="Masukkan username"
-                  autoComplete="username"
-                />
-            </div>
-            <div>
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  placeholder="Masukkan password"
-                  autoComplete="current-password"
-                />
-            </div>
-            <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? 'Memproses...' : 'Login'}
-            </Button>
-            </form>
-        </CardContent>
-      </Card>
+    <div className="relative flex items-center justify-center min-h-screen w-full overflow-hidden bg-gray-100 p-4">
+      {/* Background Shapes Animasi */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.5, rotate: -30 }}
+        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+        className="absolute -top-20 -left-20 w-72 h-72 bg-red-500/10 rounded-full blur-3xl"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.5, rotate: 30 }}
+        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+        transition={{ duration: 0.8, ease: "easeOut", delay: 0.2 }}
+        className="absolute -bottom-20 -right-20 w-72 h-72 bg-red-500/10 rounded-full blur-3xl"
+      />
+
+      {/* ====================================================== */}
+      {/* === BUNGKUS KOMPONEN KLIEN DINAMIS DENGAN SUSPENSE === */}
+      {/* ====================================================== */}
+      <Suspense fallback={<LoginFallback />}>
+        <LoginForm />
+      </Suspense>
     </div>
   );
 }
