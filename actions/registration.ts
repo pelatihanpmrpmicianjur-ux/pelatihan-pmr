@@ -392,10 +392,14 @@ export async function getTotalParticipantsAction(registrationId: string): Promis
 export async function reserveTentsAction(
     registrationId: string, 
     reservations: { tentTypeId: number, quantity: number }[]
-): Promise<{ success: boolean; message: string; data?: { expiresAt?: string, updatedOrder: { tentTypeId: number, quantity: number }[] } }> {
+): Promise<{ success: boolean; message: string; data?: { updatedOrder: { tentTypeId: number, quantity: number }[] } }> {
     const RESERVATION_DURATION_MINUTES = 15;
 
+    console.log(`\n--- [ACTION] reserveTentsAction Dimulai untuk regId: ${registrationId} ---`);
+    console.log("Menerima payload `reservations` dari frontend:", JSON.stringify(reservations, null, 2));
+
     if (!registrationId || !Array.isArray(reservations)) {
+        console.error("[ACTION] Validasi gagal: input tidak valid.");
         return { success: false, message: 'Input tidak valid.' };
     }
 
@@ -408,6 +412,7 @@ export async function reserveTentsAction(
             }
         });
         if (!registration) {
+            console.error("[ACTION] Validasi gagal: pendaftaran tidak ditemukan.");
             return { success: false, message: 'Pendaftaran tidak ditemukan.' };
         }
         
@@ -433,12 +438,10 @@ export async function reserveTentsAction(
         const expiresAt = new Date(Date.now() + RESERVATION_DURATION_MINUTES * 60 * 1000);
 
   await prisma.$transaction(async (tx) => {
-            // 1. Ambil semua reservasi lama dalam satu panggilan
-            const oldReservations = await tx.tentReservation.findMany({ 
-                where: { registrationId },
-                select: { tentTypeId: true, quantity: true }
-            });
-
+            console.log("[TRANSACTION] Memulai.");
+            // 1. Lepaskan reservasi lama
+            const oldReservations = await tx.tentReservation.findMany({ where: { registrationId }, select: { tentTypeId: true, quantity: true }});
+            console.log(`[TRANSACTION] Menemukan ${oldReservations.length} reservasi lama untuk dilepaskan.`);
             if (oldReservations.length > 0) {
                 // 2. Kembalikan semua stok lama dalam beberapa panggilan paralel, BUKAN loop serial
                 const restoreStockPromises = oldReservations.map(oldRes => 
@@ -450,12 +453,15 @@ export async function reserveTentsAction(
                 await Promise.all(restoreStockPromises);
                 
                 // 3. Hapus semua reservasi lama dalam satu panggilan
-                await tx.tentReservation.deleteMany({ where: { registrationId } });
+                 await tx.tentReservation.deleteMany({ where: { registrationId } });
+                console.log("[TRANSACTION] Reservasi lama berhasil dihapus.");
             }
 
             // 4. Buat semua reservasi baru
-            const reservationsToCreate = reservations.filter(r => r.quantity > 0);
+             const reservationsToCreate = reservations.filter(r => r.quantity > 0);
+            console.log(`[TRANSACTION] Ditemukan ${reservationsToCreate.length} item di payload dengan kuantitas > 0 untuk dibuat.`);
             if (reservationsToCreate.length > 0) {
+
                 // 5. Ambil semua stok baru secara paralel
                 const takeStockPromises = reservationsToCreate.map(res =>
                     tx.tentType.update({
@@ -463,6 +469,7 @@ export async function reserveTentsAction(
                         data: { stockAvailable: { decrement: res.quantity } },
                     })
                 );
+                console.log("[TRANSACTION] Stok berhasil dikurangi. Mencoba membuat record baru...");
                 // Menjalankan ini akan melempar error jika ada stok yang tidak cukup
                 await Promise.all(takeStockPromises);
 
@@ -475,6 +482,7 @@ export async function reserveTentsAction(
                         expiresAt
                     }))
                 });
+                console.log(`[TRANSACTION] Berhasil membuat ${reservationsToCreate.length} record TentReservation baru.`);
             }
 
             // 3. Hitung dan update total biaya tenda di pendaftaran
@@ -487,6 +495,7 @@ export async function reserveTentsAction(
             }, 0); 
             
             await tx.registration.update({ where: { id: registrationId }, data: { totalCostTenda: newTentCost } });
+       console.log("[TRANSACTION] Selesai.");
         });
 
         // 4. Ambil data reservasi terbaru untuk dikirim kembali ke frontend
@@ -494,17 +503,16 @@ export async function reserveTentsAction(
             where: { registrationId },
             select: { tentTypeId: true, quantity: true }
         });
-
+        console.log(`[ACTION] Sukses. Data final di DB: ${JSON.stringify(newReservations, null, 2)}`);
+        
         return { 
             success: true, 
             message: 'Reservasi tenda berhasil diperbarui.', 
-            data: { 
-                expiresAt: expiresAt.toISOString(), 
-                updatedOrder: newReservations 
-            } 
+            data: { updatedOrder: newReservations } 
         };
 
     } catch (error: unknown) {
+        console.error('[RESERVE_TENT_ACTION_ERROR]', error);
         let errorMessage = 'Gagal melakukan reservasi tenda.';
         // Tangani error spesifik dari Prisma jika stok tidak cukup
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025') {
