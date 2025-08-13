@@ -351,17 +351,24 @@ export async function processExcelAction(registrationId: string, filePath: strin
                         gender: p.gender,
         }));
     
-        return {
-            success: true,
-            message: 'File Excel berhasil diproses.',
-            summary: {
-                pesertaCount: pesertaData.length,
-                pendampingCount: pendampingData.length,
-                totalBiaya: (pesertaData.length * COST_PESERTA) + (pendampingData.length * COST_PENDAMPING),
-                previewPeserta: previewPesertaForClient,
-                previewPendamping: previewPendampingForClient,
-            }
-        };
+       return {
+    success: true,
+    message: 'File Excel berhasil diproses.',
+    summary: {
+        pesertaCount: pesertaData.length,
+        pendampingCount: pendampingData.length,
+        totalBiaya: (pesertaData.length * COST_PESERTA) + (pendampingData.length * COST_PENDAMPING),
+        previewPeserta: previewPesertaForClient,
+        previewPendamping: previewPendampingForClient,
+        // --- TAMBAHKAN BLOK INI ---
+        schoolInfo: {
+            schoolName: registration.schoolName,
+            coachName: registration.coachName,
+            coachPhone: registration.coachPhone,
+            schoolCategory: registration.schoolCategory,
+        }
+    }
+};
     
     } catch (error: unknown) {
         console.error("Error processing excel action:", error);

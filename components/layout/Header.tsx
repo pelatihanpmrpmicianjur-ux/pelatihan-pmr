@@ -10,19 +10,29 @@ gsap.registerPlugin(ScrollTrigger);
 
 export default function Header() {
   useEffect(() => {
-    const ctx = gsap.context(() => { // Gunakan gsap.context untuk cleanup yang aman
-        gsap.utils.toArray<HTMLElement>('.gsap-section').forEach((section) => {
-          ScrollTrigger.create({ // Sekarang ScrollTrigger sudah terdefinisi
+    const sections = gsap.utils.toArray<HTMLElement>('.gsap-section');
+    
+    // Jika tidak ada section pemicu di halaman ini, hentikan eksekusi.
+    if (sections.length === 0) {
+      return; // Keluar dari useEffect lebih awal
+    }
+    const ctx = gsap.context(() => {
+        sections.forEach((section) => {
+          ScrollTrigger.create({
             trigger: section,
             start: 'top 50%',
             end: 'bottom 50%',
             onToggle: self => {
               const theme = section.getAttribute('data-theme');
               if (self.isActive) {
+                // Meskipun kita sudah tahu section ada, tetap praktik baik untuk
+                // memeriksa target animasi individual jika mereka mungkin tidak ada di semua section
                 gsap.to('.header-logo', { color: theme === 'dark' ? 'white' : 'black', duration: 0.5 });
-                gsap.to('.header-admin', { color: theme === 'dark' ? 'white' : '#ffffff',
+                gsap.to('.header-admin', { 
                    backgroundColor: theme === 'dark' ? 'white' : '#ffffff',
-                   duration: 0.5 });
+                   color: theme === 'dark' ? 'black' : 'white', // Perbaikan: warna teks untuk admin
+                   duration: 0.5 
+                });
                 gsap.to('.header-cta', {
                   backgroundColor: theme === 'dark' ? 'white' : '#DC2626',
                   color: theme === 'dark' ? '#DC2626' : 'white',
@@ -33,7 +43,8 @@ export default function Header() {
           });
         });
     });
-    return () => ctx.revert(); // Cleanup saat komponen unmount
+    
+    return () => ctx.revert();
   }, []);
 
   return (
