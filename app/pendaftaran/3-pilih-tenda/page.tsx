@@ -99,18 +99,26 @@ export default function PilihTendaPage() {
     }, [debouncedOrder, registrationId, updateReservation]);
 
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => 
-            currentOrder.map(item => {
+        console.log(`--- [handleQuantityChange] Dipanggil ---`);
+        console.log(`Mencoba mengubah tenda ID: ${tentTypeId} dengan change: ${change}`);
+
+        setOrder(currentOrder => {
+            console.log("State `order` saat ini (sebelum diubah):", currentOrder);
+            const newOrder = currentOrder.map(item => {
                 if (item.tentTypeId === tentTypeId) {
                     const newQuantity = item.quantity + change;
+                    console.log(`Tenda ID ${tentTypeId} ditemukan. Kuantitas baru dihitung: ${newQuantity}`);
                     return { ...item, quantity: Math.max(0, newQuantity) };
                 }
                 return item;
-            })
-        );
+            });
+            console.log("State `order` yang baru (setelah diubah):", newOrder);
+            return newOrder;
+        });
     };
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
+        console.log("--- [useMemo] Dihitung ulang ---"); 
         const totalCap = order.reduce((acc, item) => {
             const tentType = tentTypes.find(t => t.id === item.tentTypeId);
             return acc + (tentType?.capacity || 0) * item.quantity;
@@ -155,6 +163,7 @@ export default function PilihTendaPage() {
                             </Alert>
                         )}
                         {tentTypes.map(tent => {
+                            console.log(`[RENDER] Merender Tenda ID: ${tent.id}, Kuantitas dari state 'order': ${order.find(o => o.tentTypeId === tent.id)?.quantity || 0}`)
                             const currentOrderItem = order.find(item => item.tentTypeId === tent.id);
                             const currentQuantity = currentOrderItem?.quantity || 0;
                             const nextTotalCapacity = totalCapacitySelected - (currentQuantity * tent.capacity) + ((currentQuantity + 1) * tent.capacity);
