@@ -553,11 +553,11 @@ export async function getSummaryAction(registrationId: string): Promise<{ succes
                     orderBy: { id: 'asc' },
                     take: 5
                 },
-                tentReservations: {
-                    include: {
-                        tentType: true,
-                    },
+              tentReservations: { // <-- INI YANG PENTING
+                include: {
+                    tentType: true,
                 },
+            },
             },
         });
 

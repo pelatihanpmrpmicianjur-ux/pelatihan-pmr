@@ -7,57 +7,113 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { useDebounce } from '@/hooks/use-debounce';
 import { type TentType } from '@prisma/client';
-import { AlertCircle, Tent, Loader2 } from 'lucide-react';
+import { AlertCircle, Tent, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-// Impor aksi baru dan hapus yang lama jika tidak diperlukan
-import { reserveTentsAction, getTotalParticipantsAction } from '@/actions/registration';
+import { reserveTentsAction, getTotalParticipantsAction, getSummaryAction } from '@/actions/registration';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
+import { Loader2 } from 'lucide-react';
 
 type TentOrderItem = {
   tentTypeId: number;
   quantity: number;
 };
 
+// ====================================================================
+// === PERBAIKAN: DEFINISI TIPE YANG EKSPLISIT DAN BENAR ===
+// ====================================================================
+type SummaryDataFromAction = {
+    schoolInfo: any;
+    costSummary: any;
+    participantSummary: { count: number; preview: string[] };
+    companionSummary: { count: number; preview: string[] };
+    // Definisikan bentuk `tentReservations` secara eksplisit
+    tentReservations: {
+        registrationId: string;
+        tentTypeId: number;
+        quantity: number;
+    }[];
+};
+
+type SummaryResult = {
+    success: boolean;
+    data?: SummaryDataFromAction;
+    message: string;
+};
+// ====================================================================
+
+
+// Komponen skeleton khusus untuk kartu tenda, agar kode utama lebih bersih
+const TentCardSkeleton = () => (
+    <Card>
+        <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4 w-full sm:w-auto">
+                <Skeleton className="h-10 w-10 rounded-lg flex-shrink-0" />
+                <div className="space-y-2 w-full">
+                    <Skeleton className="h-5 w-40" />
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-32" />
+                </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+                <Skeleton className="h-10 w-10 rounded-md" />
+                <Skeleton className="h-8 w-10" />
+                <Skeleton className="h-10 w-10 rounded-md" />
+            </div>
+        </CardContent>
+    </Card>
+);
+
+
 export default function PilihTendaPage() {
     const router = useRouter();
     const [registrationId, setRegistrationId] = useState<string | null>(null);
     const [tentTypes, setTentTypes] = useState<TentType[]>([]);
     const [order, setOrder] = useState<TentOrderItem[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    // Hapus isUpdating, kita akan menggunakan Optimistic UI
-    // const [isUpdating, setIsUpdating] = useState(false); 
     const [totalParticipants, setTotalParticipants] = useState(0);
+    const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
+    const [isReservationSaving, setIsReservationSaving] = useState(false);
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
     
     const fetchInitialData = useCallback(async (regId: string) => {
-        setIsLoading(true);
+        setIsLoadingInitialData(true);
         try {
-            const [tentsRes, totalResult] = await Promise.all([
+            const [tentsRes, totalResult, summaryResult] = await Promise.all([
                 fetch('/api/tents'),
-                getTotalParticipantsAction(regId)
+                getTotalParticipantsAction(regId),
+                getSummaryAction(regId) as Promise<SummaryResult> // Beri tahu TypeScript tentang tipe hasil
             ]);
 
             if (!tentsRes.ok) throw new Error('Gagal memuat data tenda.');
             const tentsData: TentType[] = await tentsRes.json();
             setTentTypes(tentsData);
-            
-            const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
-            if (cachedOrder) {
-                setOrder(JSON.parse(cachedOrder));
+
+            if (!totalResult.success) throw new Error(totalResult.message);
+            setTotalParticipants(totalResult.total);
+
+            if (summaryResult.success && summaryResult.data) {
+                const summaryData = summaryResult.data;
+                const savedReservations = summaryData.tentReservations || [];
+
+                const savedOrder = tentsData.map(tent => {
+                    const savedItem = savedReservations.find(item => item.tentTypeId === tent.id);
+                    return {
+                        tentTypeId: tent.id,
+                        quantity: savedItem?.quantity || 0,
+                    };
+                });
+                setOrder(savedOrder);
             } else {
                 setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
             }
 
-            if (!totalResult.success) {
-                throw new Error(totalResult.message);
-            }
-            setTotalParticipants(totalResult.total);
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
             toast.error(message);
         } finally {
-            setIsLoading(false);
+            setIsLoadingInitialData(false);
         }
     }, []);
 
@@ -74,25 +130,17 @@ export default function PilihTendaPage() {
   
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
-
+        
+        setIsReservationSaving(true);
         localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
-
-        // Tampilkan feedback non-blocking
-        const toastId = toast.loading("Menyimpan pilihan...", { duration: 15000 });
 
         const result = await reserveTentsAction(regId, currentOrder);
         
-        toast.dismiss(toastId);
+        setIsReservationSaving(false);
 
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
-            // Jika gagal, pulihkan state UI ke kondisi terakhir yang valid
-            // dengan mengambil data lagi dari server
-            if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
-                await fetchInitialData(regId);
-            }
-        } else {
-            toast.success("Pilihan tenda disimpan.", { duration: 2000 });
+            await fetchInitialData(regId);
         }
     }, [fetchInitialData]);
 
@@ -136,14 +184,6 @@ export default function PilihTendaPage() {
         };
     }, [order, tentTypes, totalParticipants]);
 
-    if (isLoading) {
-        return (
-            <div className="flex justify-center items-center h-[calc(100vh-200px)]">
-                <Loader2 className="h-10 w-10 animate-spin text-red-600" />
-            </div>
-        );
-    }
-
     return (
         <Card>
             <CardHeader className="text-center">
@@ -162,32 +202,43 @@ export default function PilihTendaPage() {
                                 </AlertDescription>
                             </Alert>
                         )}
-                        {tentTypes.map(tent => {
-                            const currentOrderItem = order.find(item => item.tentTypeId === tent.id);
-                            const currentQuantity = currentOrderItem?.quantity || 0;
-                            const nextTotalCapacity = totalCapacitySelected - (currentQuantity * tent.capacity) + ((currentQuantity + 1) * tent.capacity);
-                            const wouldExceedCapacity = nextTotalCapacity > maxCapacityAllowed && maxCapacityAllowed > 0;
-                            const isPlusDisabled = currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
-                            return (
-                                <Card key={tent.id} className="transition-all hover:shadow-md">
-                                    <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                                        <div className="flex items-center gap-4 w-full sm:w-auto">
-                                            <Tent className="h-10 w-10 text-red-500 flex-shrink-0" />
-                                            <div>
-                                                <h3 className="font-bold">Tenda Kapasitas {tent.capacity} Orang</h3>
-                                                <p className="text-sm text-green-600 font-semibold">Rp {tent.price.toLocaleString('id-ID')}</p>
-                                                <p className={`text-sm ${tent.stockAvailable < 5 ? 'text-red-500' : 'text-muted-foreground'}`}>Stok Tersisa: {tent.stockAvailable}</p>
+                        
+                        {isLoadingInitialData ? (
+                            <>
+                                <TentCardSkeleton />
+                                <TentCardSkeleton />
+                                <TentCardSkeleton />
+                            </>
+                        ) : (
+                            tentTypes.map(tent => {
+                                const currentOrderItem = order.find(item => item.tentTypeId === tent.id);
+                                const currentQuantity = currentOrderItem?.quantity || 0;
+                                const nextTotalCapacity = totalCapacitySelected - (currentQuantity * tent.capacity) + ((currentQuantity + 1) * tent.capacity);
+                                const wouldExceedCapacity = nextTotalCapacity > maxCapacityAllowed && maxCapacityAllowed > 0;
+                                const isPlusDisabled = currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
+                                
+                                return (
+                                    <Card key={tent.id} className="transition-all hover:shadow-md">
+                                        <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                                            <div className="flex items-center gap-4 w-full sm:w-auto">
+                                                <Tent className="h-10 w-10 text-red-500 flex-shrink-0" />
+                                                <div>
+                                                    <h3 className="font-bold">Tenda Kapasitas {tent.capacity} Orang</h3>
+                                                    <p className="text-sm text-green-600 font-semibold">Rp {tent.price.toLocaleString('id-ID')}</p>
+                                                    <p className={`text-sm ${tent.stockAvailable < 5 ? 'text-red-500' : 'text-muted-foreground'}`}>Stok Tersisa: {tent.stockAvailable}</p>
+                                                </div>
                                             </div>
-                                        </div>
-                                        <div className="flex items-center gap-2 flex-shrink-0">
-                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
-                                            <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
-                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            );
-                        })}
+                                            <div className="flex items-center gap-2 flex-shrink-0">
+                                                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
+                                                <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
+                                                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                );
+                            })
+                        )}
+
                         <Card className="bg-slate-50">
                             <CardContent className="p-4">
                                 <h3 className="font-bold">Bawa Tenda Sendiri</h3>
@@ -198,24 +249,44 @@ export default function PilihTendaPage() {
                     <div className="lg:col-span-1">
                         <div className="sticky top-24 space-y-4">
                             <Card>
-                                <CardHeader><CardTitle>Informasi Peserta</CardTitle></CardHeader>
+                                <CardHeader><CardTitle>Informasi Pendaftar</CardTitle></CardHeader>
                                 <CardContent className="space-y-2">
-                                    <div className="flex justify-between text-sm"><span>Total Orang:</span> <span className="font-bold">{totalParticipants} orang</span></div>
-                                    <div className="flex justify-between text-sm"><span>Kapasitas Sewa Maks:</span> <span className="font-bold">{maxCapacityAllowed} orang</span></div>
+                                    {isLoadingInitialData ? (
+                                        <div className="space-y-2">
+                                            <Skeleton className="h-5 w-full" />
+                                            <Skeleton className="h-5 w-3/4" />
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="flex justify-between text-sm"><span>Total Orang:</span> <span className="font-bold">{totalParticipants} orang</span></div>
+                                            <div className="flex justify-between text-sm"><span>Kapasitas Sewa Maks:</span> <span className="font-bold">{maxCapacityAllowed} orang</span></div>
+                                        </>
+                                    )}
                                 </CardContent>
                             </Card>
                             <Card className="bg-slate-50">
                                 <CardHeader><CardTitle>Ringkasan Pesanan Tenda</CardTitle></CardHeader>
                                 <CardContent>
-                                    <div className="flex justify-between text-sm"><span>Kapasitas Terpilih:</span> <span className={`font-bold ${isCapacityExceeded ? 'text-red-500' : ''}`}>{totalCapacitySelected} orang</span></div>
-                                    <div className="flex justify-between mt-4 pt-4 border-t">
-                                        <span className="text-lg">Total Biaya:</span>
-                                        <span className="text-lg font-bold text-red-600">Rp {totalCost.toLocaleString('id-ID')}</span>
-                                    </div>
+                                    {isLoadingInitialData ? (
+                                        <div className="space-y-2">
+                                            <Skeleton className="h-5 w-full" />
+                                            <div className="border-t pt-4 mt-4">
+                                                <Skeleton className="h-7 w-1/2 ml-auto" />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="flex justify-between text-sm"><span>Kapasitas Terpilih:</span> <span className={`font-bold ${isCapacityExceeded ? 'text-red-500' : ''}`}>{totalCapacitySelected} orang</span></div>
+                                            <div className="flex justify-between mt-4 pt-4 border-t">
+                                                <span className="text-lg">Total Biaya:</span>
+                                                <span className="text-lg font-bold text-red-600">Rp {totalCost.toLocaleString('id-ID')}</span>
+                                            </div>
+                                        </>
+                                    )}
                                 </CardContent>
                             </Card>
-                            <Button size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={() => router.push('/pendaftaran/4-ringkasan')} disabled={isCapacityExceeded}>
-                                Lanjut ke Ringkasan
+                            <Button size="lg" className="w-full bg-red-600 hover:bg-red-700" onClick={() => router.push('/pendaftaran/4-ringkasan')} disabled={isCapacityExceeded || isLoadingInitialData || isReservationSaving}>
+                                {isReservationSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Menyimpan...</> : "Lanjut ke Ringkasan"}
                             </Button>
                         </div>
                     </div>
