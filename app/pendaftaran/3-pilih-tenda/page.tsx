@@ -22,13 +22,14 @@ export default function PilihTendaPage() {
     const [registrationId, setRegistrationId] = useState<string | null>(null);
     const [tentTypes, setTentTypes] = useState<TentType[]>([]);
     const [order, setOrder] = useState<TentOrderItem[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(true); // Mulai dengan true
     const [totalParticipants, setTotalParticipants] = useState(0);
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
 
-    const fetchInitialData = useCallback(async (regId: string) => {
-        setIsLoading(true);
+
+     const fetchInitialData = useCallback(async (regId: string) => {
+        // Jangan set isLoading di sini agar tidak memicu spinner saat re-fetch
         try {
             const [tentsRes, totalResult] = await Promise.all([
                 fetch('/api/tents'),
@@ -39,24 +40,25 @@ export default function PilihTendaPage() {
             const tentsData: TentType[] = await tentsRes.json();
             setTentTypes(tentsData);
             
-            const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
-            if (cachedOrder) {
-                setOrder(JSON.parse(cachedOrder));
-            } else {
-                setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
+            if (isInitialMount.current) { // Hanya set order dari cache saat pertama kali
+                const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
+                if (cachedOrder) {
+                    setOrder(JSON.parse(cachedOrder));
+                } else {
+                    setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
+                }
             }
-
-            if (!totalResult.success) {
-                throw new Error(totalResult.message);
-            }
+            
+            if (!totalResult.success) throw new Error(totalResult.message);
             setTotalParticipants(totalResult.total);
+
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
             toast.error(message);
         } finally {
-            setIsLoading(false);
+            if (isLoading) setIsLoading(false);
         }
-    }, []);
+    }, [isLoading]); // Tambahkan isLoading agar bisa mengubahnya di finally
 
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
@@ -68,25 +70,27 @@ export default function PilihTendaPage() {
         setRegistrationId(id);
         fetchInitialData(id);
     }, [router, fetchInitialData]);
-  
+
+    // ====================================================================
+    // === TAMBAHKAN KEMBALI FUNGSI INI ===
+    // ====================================================================
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
 
         localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
-        const toastId = toast.loading("Menyimpan pilihan...", { duration: 15000 });
-
+        
+        // Non-blocking, kita tidak set isUpdating lagi
         const result = await reserveTentsAction(regId, currentOrder);
         
-        toast.dismiss(toastId);
-
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
+            // Jika gagal, pulihkan state UI dengan data valid dari server
             if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
                 await fetchInitialData(regId);
             }
         }
-        // Tidak ada toast sukses di sini untuk UX yang lebih senyap
     }, [fetchInitialData]);
+    // ====================================================================
 
     useEffect(() => {
         if (isInitialMount.current) {
@@ -94,28 +98,27 @@ export default function PilihTendaPage() {
             return;
         }
         if (registrationId) {
-            updateReservation(debouncedOrder, registrationId);
+            // Toast loading bisa ditambahkan di sini agar tidak duplikat dengan sukses
+            const toastId = toast.loading("Menyimpan pilihan...");
+            updateReservation(debouncedOrder, registrationId).then(() => {
+                toast.dismiss(toastId); // Tutup toast setelah selesai
+            });
         }
     }, [debouncedOrder, registrationId, updateReservation]);
 
+    // Fungsi handleQuantityChange (instan di UI)
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        console.log(`--- [handleQuantityChange] Dipanggil ---`);
-        console.log(`Mencoba mengubah tenda ID: ${tentTypeId} dengan change: ${change}`);
-
-        setOrder(currentOrder => {
-            console.log("State `order` saat ini (sebelum diubah):", currentOrder);
-            const newOrder = currentOrder.map(item => {
+        setOrder(currentOrder => 
+            currentOrder.map(item => {
                 if (item.tentTypeId === tentTypeId) {
                     const newQuantity = item.quantity + change;
-                    console.log(`Tenda ID ${tentTypeId} ditemukan. Kuantitas baru dihitung: ${newQuantity}`);
                     return { ...item, quantity: Math.max(0, newQuantity) };
                 }
                 return item;
-            });
-            console.log("State `order` yang baru (setelah diubah):", newOrder);
-            return newOrder;
-        });
+            })
+        );
     };
+
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
         console.log("--- [useMemo] Dihitung ulang ---"); 
