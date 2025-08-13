@@ -932,16 +932,32 @@ export async function submitRegistrationAction(registrationId: string, formData:
             throw new Error(`Gagal mengunggah bukti pembayaran: ${uploadError.message}`);
         }
 
-        // --- Langkah 2: Update Database menjadi SUBMITTED (Operasi Kritis) ---
-        await prisma.registration.update({
-            where: { id: registrationId },
-            data: {
-                status: 'SUBMITTED',
-                customOrderId: orderId,
-                paymentProofTempPath: proofPath,
-            }
-        });
+         await prisma.$transaction(async (tx) => {
+            
+            // --- LOGIKA BARU: Perpanjang masa berlaku reservasi tenda ---
+            // Beri waktu, misalnya, 7 hari dari sekarang agar admin punya waktu untuk verifikasi
+            const newExpiryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
 
+            const updatedReservations = await tx.tentReservation.updateMany({
+                where: { registrationId: registrationId },
+                data: { expiresAt: newExpiryDate }
+            });
+
+            if (updatedReservations.count > 0) {
+                console.log(`[ACTION] Berhasil memperpanjang ${updatedReservations.count} reservasi tenda untuk regId: ${registrationId}`);
+            }
+            // -----------------------------------------------------------
+            
+            // Lanjutkan dengan update status registrasi
+            await tx.registration.update({
+                where: { id: registrationId },
+                data: {
+                    status: 'SUBMITTED',
+                    customOrderId: orderId,
+                    paymentProofTempPath: proofPath,
+                }
+            });
+        });
     } catch (error: unknown) {
         // Jika langkah kritis (upload bukti bayar atau update DB) gagal, seluruh aksi gagal.
         let errorMessage = "Gagal memproses pendaftaran.";
@@ -965,7 +981,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
                 totalCostPeserta: true,
                 totalCostPendamping: true,
                 totalCostTenda: true,
-                grandTotal: true,
+                grandTotal: true, // <-- Ambil grandTotal terbaru
                 _count: {
                     select: {
                         participants: true,
@@ -1049,19 +1065,18 @@ export async function submitRegistrationAction(registrationId: string, formData:
         // --- Tabel Biaya ---
         let startY = A5_HEIGHT - 160;
         const rowHeight = 20;
-
         const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')},-`;
-         const participantCount = await prisma.participant.count({
-        where: { registrationId: registration.id }
-         });
-        const companionCount = await prisma.companion.count({
-            where: { registrationId: registration.id }
-        });
-         const rows = [
-        ["Biaya Pendaftaran Peserta", `${participantCount} orang`, formatCurrency(registration.totalCostPeserta)],
-        ...(companionCount > 0 ? [["Biaya Pendaftaran Pendamping", `${companionCount} orang`, formatCurrency(registration.totalCostPendamping)]] : []),
-        ...(registration.totalCostTenda > 0 ? [["Sewa Tenda", "-", formatCurrency(registration.totalCostTenda)]] : []),
-    ];
+        
+        // Gunakan count dari `dataForReceipt._count`
+        const participantCount = dataForReceipt._count.participants;
+        const companionCount = dataForReceipt._count.companions;
+
+        // Gunakan biaya dari `dataForReceipt`
+        const rows = [
+            ["Biaya Pendaftaran Peserta", `${participantCount} orang`, formatCurrency(dataForReceipt.totalCostPeserta)],
+            ...(companionCount > 0 ? [["Biaya Pendaftaran Pendamping", `${companionCount} orang`, formatCurrency(dataForReceipt.totalCostPendamping)]] : []),
+            ...(dataForReceipt.totalCostTenda > 0 ? [["Sewa Tenda", "-", formatCurrency(dataForReceipt.totalCostTenda)]] : []),
+        ];
 
         rows.forEach(([desc, qty, subtotal]) => {
             page.drawText(desc, { x: margin, y: startY, font: font, size: 10, color: textBlack });
@@ -1071,8 +1086,9 @@ export async function submitRegistrationAction(registrationId: string, formData:
         });
 
         // --- Total ---
+        // Gunakan grandTotal dari `dataForReceipt`
         page.drawText("Total Dibayar", { x: 350, y: startY - 10, font: boldFont, size: 12, color: textBlack });
-        page.drawText(formatCurrency(registration.grandTotal), { x: 470, y: startY - 10, font: boldFont, size: 14, color: pmiRed });
+        page.drawText(formatCurrency(dataForReceipt.grandTotal), { x: 470, y: startY - 10, font: boldFont, size: 14, color: pmiRed });
 
         // --- Footer ---
         page.drawRectangle({ x: 0, y: 0, width: 595.28, height: 70, color: rgb(0.98, 0.98, 0.98) });
@@ -1111,6 +1127,7 @@ export async function submitRegistrationAction(registrationId: string, formData:
     }
     // Selalu kembalikan sukses jika langkah kritis (update DB) berhasil
     return { success: true, message: 'Pendaftaran berhasil dikirim! Kwitansi akan segera tersedia.', orderId };
+
 }
 
 export async function deleteRegistrationAction(registrationId: string): Promise<ActionResult> {
