@@ -432,32 +432,48 @@ export async function reserveTentsAction(
 
         const expiresAt = new Date(Date.now() + RESERVATION_DURATION_MINUTES * 60 * 1000);
 
-        await prisma.$transaction(async (tx) => {
-            // 1. Lepaskan semua reservasi lama untuk pendaftaran ini
-            const oldReservations = await tx.tentReservation.findMany({ where: { registrationId } });
-            for (const oldRes of oldReservations) {
-                // Kembalikan stok
-                await tx.tentType.update({ 
-                    where: { id: oldRes.tentTypeId }, 
-                    data: { stockAvailable: { increment: oldRes.quantity } } 
-                });
-            }
-            // Hapus record reservasi lama
-            await tx.tentReservation.deleteMany({ where: { registrationId } });
+  await prisma.$transaction(async (tx) => {
+            // 1. Ambil semua reservasi lama dalam satu panggilan
+            const oldReservations = await tx.tentReservation.findMany({ 
+                where: { registrationId },
+                select: { tentTypeId: true, quantity: true }
+            });
 
-            // 2. Buat reservasi baru
-            for (const res of reservations) {
-                if (res.quantity === 0) continue; // Lewati jika kuantitas 0
+            if (oldReservations.length > 0) {
+                // 2. Kembalikan semua stok lama dalam beberapa panggilan paralel, BUKAN loop serial
+                const restoreStockPromises = oldReservations.map(oldRes => 
+                    tx.tentType.update({
+                        where: { id: oldRes.tentTypeId },
+                        data: { stockAvailable: { increment: oldRes.quantity } }
+                    })
+                );
+                await Promise.all(restoreStockPromises);
                 
-                // Ambil stok dan kurangi
-                await tx.tentType.update({
-                    where: { id: res.tentTypeId, stockAvailable: { gte: res.quantity } },
-                    data: { stockAvailable: { decrement: res.quantity } },
-                });
+                // 3. Hapus semua reservasi lama dalam satu panggilan
+                await tx.tentReservation.deleteMany({ where: { registrationId } });
+            }
 
-                // Buat record reservasi baru
-                await tx.tentReservation.create({
-                    data: { registrationId, tentTypeId: res.tentTypeId, quantity: res.quantity, expiresAt },
+            // 4. Buat semua reservasi baru
+            const reservationsToCreate = reservations.filter(r => r.quantity > 0);
+            if (reservationsToCreate.length > 0) {
+                // 5. Ambil semua stok baru secara paralel
+                const takeStockPromises = reservationsToCreate.map(res =>
+                    tx.tentType.update({
+                        where: { id: res.tentTypeId, stockAvailable: { gte: res.quantity } },
+                        data: { stockAvailable: { decrement: res.quantity } },
+                    })
+                );
+                // Menjalankan ini akan melempar error jika ada stok yang tidak cukup
+                await Promise.all(takeStockPromises);
+
+                // 6. Buat semua record reservasi baru dalam SATU panggilan
+                await tx.tentReservation.createMany({
+                    data: reservationsToCreate.map(res => ({
+                        registrationId,
+                        tentTypeId: res.tentTypeId,
+                        quantity: res.quantity,
+                        expiresAt
+                    }))
                 });
             }
 

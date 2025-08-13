@@ -28,69 +28,62 @@ export default function PilihTendaPage() {
     const debouncedOrder = useDebounce(order, 750);
 
 
-     const fetchInitialData = useCallback(async (regId: string) => {
-        // Jangan set isLoading di sini agar tidak memicu spinner saat re-fetch
+  const fetchInitialData = useCallback(async (regId: string) => {
         try {
             const [tentsRes, totalResult] = await Promise.all([
                 fetch('/api/tents'),
                 getTotalParticipantsAction(regId)
             ]);
-
             if (!tentsRes.ok) throw new Error('Gagal memuat data tenda.');
             const tentsData: TentType[] = await tentsRes.json();
-            setTentTypes(tentsData);
-            
-            if (isInitialMount.current) { // Hanya set order dari cache saat pertama kali
-                const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
-                if (cachedOrder) {
-                    setOrder(JSON.parse(cachedOrder));
-                } else {
-                    setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
-                }
-            }
-            
+            if (tentsData.length === 0) throw new Error("Tipe tenda tidak tersedia.");
             if (!totalResult.success) throw new Error(totalResult.message);
+            
+            setTentTypes(tentsData);
             setTotalParticipants(totalResult.total);
-
+            
+            if (isInitialMount.current) {
+                const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
+                if (cachedOrder) setOrder(JSON.parse(cachedOrder));
+                else setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
+            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
             toast.error(message);
         } finally {
             if (isLoading) setIsLoading(false);
         }
-    }, [isLoading]); // Tambahkan isLoading agar bisa mengubahnya di finally
+    }, [isLoading]); // Dependensi useCallback, `isInitialMount.current` akan dibaca saat dipanggil
 
+    // `useEffect` ini HANYA bertanggung jawab untuk memulai pengambilan data awal.
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
-            toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
+            toast.error("Sesi tidak ditemukan.");
             router.push('/pendaftaran/1-data-sekolah');
             return;
         }
         setRegistrationId(id);
         fetchInitialData(id);
-    }, [router, fetchInitialData]);
+    }, [router, fetchInitialData]); // `fetchInitialData` sekarang dependensi yang stabil
 
-    // ====================================================================
-    // === TAMBAHKAN KEMBALI FUNGSI INI ===
-    // ====================================================================
+    // ==============================================================
+    // === `updateReservation` SEKARANG BISA "MELIHAT" `fetchInitialData` ===
+    // ==============================================================
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
-
         localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
         
-        // Non-blocking, kita tidak set isUpdating lagi
         const result = await reserveTentsAction(regId, currentOrder);
         
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
-            // Jika gagal, pulihkan state UI dengan data valid dari server
             if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
+                // Sekarang ini valid karena fetchInitialData ada di scope yang sama
                 await fetchInitialData(regId);
             }
         }
-    }, [fetchInitialData]);
-    // ====================================================================
+    }, [fetchInitialData]); // Tambahkan `fetchInitialData` sebagai dependensi di sini juga
 
     useEffect(() => {
         if (isInitialMount.current) {
@@ -98,25 +91,28 @@ export default function PilihTendaPage() {
             return;
         }
         if (registrationId) {
-            // Toast loading bisa ditambahkan di sini agar tidak duplikat dengan sukses
             const toastId = toast.loading("Menyimpan pilihan...");
             updateReservation(debouncedOrder, registrationId).then(() => {
-                toast.dismiss(toastId); // Tutup toast setelah selesai
+                toast.dismiss(toastId);
             });
         }
     }, [debouncedOrder, registrationId, updateReservation]);
 
     // Fungsi handleQuantityChange (instan di UI)
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => 
-            currentOrder.map(item => {
+        console.log(`[handleQuantityChange] Dipanggil untuk Tenda ID: ${tentTypeId}`);
+        setOrder(currentOrder => {
+            console.log(`[handleQuantityChange] State 'order' sebelumnya:`, currentOrder);
+            const newOrder = currentOrder.map(item => {
                 if (item.tentTypeId === tentTypeId) {
                     const newQuantity = item.quantity + change;
                     return { ...item, quantity: Math.max(0, newQuantity) };
                 }
                 return item;
-            })
-        );
+            });
+            console.log(`[handleQuantityChange] State 'order' yang baru:`, newOrder);
+            return newOrder;
+        });
     };
 
   

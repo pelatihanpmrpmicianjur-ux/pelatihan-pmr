@@ -55,6 +55,7 @@ model Registration {
   auditLogs            AuditLog[]
 
   @@unique([schoolNameNormalized, status], name: "unique_school_per_status")
+  @@index([status])
 }
 
 
@@ -73,6 +74,8 @@ model Participant {
   phone          String?
   gender         String
   photoPath      String?      // URL ke foto di Supabase Storage setelah di-upload
+
+   @@index([registrationId])
 }
 
 model Companion {
@@ -89,6 +92,8 @@ model Companion {
   entryYear      Int
   phone          String?
   gender         String       // "L" atau "P"
+
+  @@index([registrationId])
 }
 
 model TentType {
@@ -122,6 +127,8 @@ model TentReservation {
   tentType       TentType     @relation(fields: [tentTypeId], references: [id])
   quantity       Int
   expiresAt      DateTime
+
+  @@index([registrationId])
 }
 
 model AuditLog {
