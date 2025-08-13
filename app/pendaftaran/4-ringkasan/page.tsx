@@ -59,6 +59,23 @@ export default function RingkasanPage() {
   const [summary, setSummary] = useState<BuiltSummaryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+   const handleContinueToPayment = () => {
+        // Ambil ID registrasi
+        const registrationId = localStorage.getItem('registrationId');
+        
+        // Simpan grandTotal ke localStorage SEBELUM berpindah halaman
+        if (summary && registrationId) {
+            localStorage.setItem(
+                `payment_total_${registrationId}`, 
+                summary.costSummary.grandTotal.toString()
+            );
+        }
+        
+        // Arahkan ke halaman pembayaran
+        router.push('/pendaftaran/5-pembayaran');
+    };
+
+
   useEffect(() => {
     setIsLoading(true);
     const registrationId = localStorage.getItem('registrationId');
@@ -208,10 +225,10 @@ export default function RingkasanPage() {
                     Kembali
                 </Button>
                 <BackgroundGradient className="rounded-md">
-                    <Button size="lg" className="bg-red-600 hover:bg-red-700 text-white font-bold w-full" onClick={() => router.push('/pendaftaran/5-pembayaran')}>
-                        Lanjutkan ke Pembayaran
-                        <ArrowRight className="h-4 w-4 ml-2" />
-                    </Button>
+                     <Button size="lg" className="bg-red-600 ..." onClick={handleContinueToPayment}>
+            Lanjutkan ke Pembayaran
+            <ArrowRight className="h-4 w-4 ml-2" />
+        </Button>
                 </BackgroundGradient>
             </CardFooter>
         </Card>

@@ -36,13 +36,18 @@ export default function PembayaranPage() {
         }
         setRegistrationId(id);
 
-        // Prioritaskan mengambil total dari localStorage untuk kecepatan
-        const savedTotal = localStorage.getItem(`payment_total_${id}`);
-        if (savedTotal) {
-            setGrandTotal(parseInt(savedTotal, 10));
+        // ====================================================================
+        // === OPTIMASI UTAMA: BACA DARI LOCALSTORAGE DULU ===
+        // ====================================================================
+        const cachedTotal = localStorage.getItem(`payment_total_${id}`);
+
+        if (cachedTotal) {
+            // Jika ada di cache, gunakan itu. Parsing ke angka.
+            console.log("Mengambil grandTotal dari cache localStorage.");
+            setGrandTotal(parseInt(cachedTotal, 10));
         } else {
-            // Jika tidak ada di cache (misalnya, pengguna langsung ke URL ini),
-            // ambil dari server sebagai fallback.
+            // Jika TIDAK ada (misalnya, pengguna refresh), baru panggil API sebagai fallback
+            console.warn("grandTotal tidak ditemukan di cache, mengambil dari server...");
             async function fetchTotal(regId: string) {
                 try {
                     const result = await getSummaryAction(regId);
@@ -54,11 +59,14 @@ export default function PembayaranPage() {
                 } catch (error: unknown) {
                     const message = error instanceof Error ? error.message : "Terjadi kesalahan";
                     toast.error(message);
-                    router.push('/pendaftaran/4-ringkasan'); // Arahkan kembali
+                    // Arahkan kembali ke ringkasan jika fetch gagal
+                    router.push('/pendaftaran/4-ringkasan'); 
                 }
             }
             fetchTotal(id);
         }
+        // ====================================================================
+
     }, [router]);
 
     useEffect(() => {
