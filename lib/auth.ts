@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 
 // Definisikan authOptions di sini
 export const authOptions: NextAuthOptions = {
+  
   providers: [
     CredentialsProvider({
       name: 'Credentials',
@@ -14,26 +15,59 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
-        if (!credentials?.username || !credentials?.password) {
+        console.log("\n--- [AUTHORIZE] FUNGSI DIPANGGIL ---");
+        
+        if (!credentials) {
+            console.log("[AUTHORIZE] Gagal: Kredensial tidak ada.");
+            return null;
+        }
+
+        // --- LOG KRUSIAL DI SINI ---
+        // Kita akan log kredensial yang diterima, dibungkus tanda kutip untuk melihat spasi
+        console.log(`[AUTHORIZE] Username diterima: "${credentials.username}"`);
+        console.log(`[AUTHORIZE] Password diterima: "${credentials.password}"`);
+        // -----------------------------
+
+        // --- PERBAIKAN: Lakukan .trim() untuk membersihkan spasi ---
+        const username = credentials.username.trim();
+        const password = credentials.password;
+        // --------------------------------------------------------
+
+        if (!username || !password) {
+          console.log("[AUTHORIZE] Gagal: Username atau password kosong setelah di-trim.");
           return null;
         }
-        const user = await prisma.adminUser.findUnique({
-          where: { username: credentials.username }
-        });
-        if (!user) {
+
+        try {
+          console.log(`[AUTHORIZE] Mencari user: "${username}"`);
+          const user = await prisma.adminUser.findUnique({
+            where: { username: username } // Gunakan username yang sudah di-trim
+          });
+
+          if (!user) {
+            console.log(`[AUTHORIZE] Gagal: User '${username}' tidak ditemukan.`);
+            return null;
+          }
+          console.log(`[AUTHORIZE] User ditemukan: ${user.username}`);
+
+          console.log("[AUTHORIZE] Membandingkan password...");
+          const isPasswordValid = await bcrypt.compare(
+            password, // Gunakan password asli tanpa trim
+            user.password
+          );
+
+          if (!isPasswordValid) {
+            console.log("[AUTHORIZE] Gagal: Password tidak cocok.");
+            return null;
+          }
+          console.log("[AUTHORIZE] Sukses: Password cocok.");
+          
+          return { id: user.id, username: user.username };
+
+        } catch (error) {
+          console.error("[AUTHORIZE] Error kritis:", error);
           return null;
         }
-        const isPasswordValid = await bcrypt.compare(
-          credentials.password,
-          user.password
-        );
-        if (!isPasswordValid) {
-          return null;
-        }
-        return {
-          id: user.id,
-          username: user.username,
-        };
       }
     })
   ],
