@@ -192,24 +192,27 @@ export default function PilihTendaPage() {
                             const wouldExceedCapacity = nextTotalCapacity > maxCapacityAllowed && maxCapacityAllowed > 0;
                             const isPlusDisabled = currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
                             return (
-                                <Card key={tent.id} className="transition-all hover:shadow-md">
-                                    <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                                        <div className="flex items-center gap-4 w-full sm:w-auto">
-                                            <Tent className="h-10 w-10 text-red-500 flex-shrink-0" />
-                                            <div>
-                                                <h3 className="font-bold">Tenda Kapasitas {tent.capacity} Orang</h3>
-                                                <p className="text-sm text-green-600 font-semibold">Rp {tent.price.toLocaleString('id-ID')}</p>
-                                                <p className={`text-sm ${tent.stockAvailable < 5 ? 'text-red-500' : 'text-muted-foreground'}`}>Stok Tersisa: {tent.stockAvailable}</p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2 flex-shrink-0">
-                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
-                                            <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
-                                            <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            );
+    <Card key={tent.id} className="transition-all hover:shadow-md">
+        <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4 w-full sm:w-auto">
+                <Tent className="h-10 w-10 text-red-500 flex-shrink-0" />
+                <div>
+                    {/* --- PERUBAHAN DI SINI --- */}
+                    <h3 className="font-bold text-lg">{tent.name}</h3>
+                    <p className="text-sm text-muted-foreground">{tent.capacityDisplay}</p>
+                    <p className="text-sm text-green-600 font-semibold mt-1">Rp {tent.price.toLocaleString('id-ID')}</p>
+                    {/* ------------------------- */}
+                </div>
+            </div>
+            <div className="flex-grow sm:flex-grow-0"></div> {/* Spacer */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
+                <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
+                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
+            </div>
+        </CardContent>
+    </Card>
+);
                         })}
                         <Card className="bg-slate-50">
                             <CardContent className="p-4">

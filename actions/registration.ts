@@ -158,7 +158,7 @@ type SummaryData = {
 export async function processExcelAction(registrationId: string, filePath: string): Promise<{ success: boolean; summary?: any; message: string; }> {
     const DATA_START_ROW = 7;
     const COST_PESERTA = 40000;
-    const COST_PENDAMPING = 25000;
+    const COST_PENDAMPING = 30000;
 
     function getPhotoPath(schoolSlug: string, fileName: string): string {
         return `temp/${schoolSlug}/photos/${fileName}`;

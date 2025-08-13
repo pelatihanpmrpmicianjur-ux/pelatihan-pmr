@@ -116,7 +116,7 @@ export default function RingkasanPage() {
 
                 const costTenda = tentSummary.reduce((sum: number, t) => sum + t.subtotal, 0);
                 const costPeserta = excelSummary.pesertaCount * 40000;
-                const costPendamping = excelSummary.pendampingCount * 25000;
+                const costPendamping = excelSummary.pendampingCount * 30000;
                 const grandTotal = costPeserta + costPendamping + costTenda;
                 
                 const fullSummary: BuiltSummaryData = {
