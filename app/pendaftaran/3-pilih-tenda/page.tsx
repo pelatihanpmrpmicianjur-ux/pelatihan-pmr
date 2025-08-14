@@ -104,7 +104,7 @@ export default function PilihTendaPage() {
         }
     }, [debouncedOrder, registrationId, pageState, updateReservation]);
 
-    // Fungsi ini mengubah kuantitas secara instan di UI
+    // Fungsi untuk mengubah kuantitas (instan di UI)
     const handleQuantityChange = (tentTypeId: number, change: number) => {
         setOrder(currentOrder => 
             currentOrder.map(item => {
@@ -117,6 +117,7 @@ export default function PilihTendaPage() {
         );
     };
   
+    // useMemo untuk kalkulasi biaya dan kapasitas
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
         const totalCap = order.reduce((acc, item) => {
             const tentType = tentTypes.find(t => t.id === item.tentTypeId);
@@ -142,7 +143,6 @@ export default function PilihTendaPage() {
             </div>
         );
     }
-
     // Tampilan UI Utama (setelah loading selesai)
     return (
         <Card>
