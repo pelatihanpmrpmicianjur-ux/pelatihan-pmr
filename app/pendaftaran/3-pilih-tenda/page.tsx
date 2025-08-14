@@ -12,7 +12,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { reserveTentsAction } from '@/actions/registration';
 import Image from 'next/image';
-import { produce } from 'immer';
+import { produce } from 'immer'; // <-- Impor krusial dari immer
 
 type TentOrderItem = {
   tentTypeId: number;
@@ -30,11 +30,11 @@ export default function PilihTendaPage() {
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
 
- useEffect(() => {
-        console.log("Mulai `useEffect` inisialisasi.");
+    // useEffect ini HANYA membaca dari localStorage, membuatnya sangat cepat.
+    useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
-            toast.error("Sesi tidak ditemukan.");
+            toast.error("Sesi tidak ditemukan. Harap kembali ke Langkah 1.");
             router.push('/pendaftaran/1-data-sekolah');
             return;
         }
@@ -42,70 +42,69 @@ export default function PilihTendaPage() {
 
         try {
             const prefetchDataJSON = localStorage.getItem(`next_step_data_${id}`);
-            if (!prefetchDataJSON) throw new Error("Data persiapan tidak ditemukan.");
+            if (!prefetchDataJSON) {
+                throw new Error("Data persiapan untuk langkah ini tidak ditemukan. Silakan kembali ke langkah sebelumnya.");
+            }
             const prefetchData = JSON.parse(prefetchDataJSON);
 
             const tents = prefetchData.tents || [];
-            const participants = prefetchData.totalParticipants || 0;
-
-            console.log("Data tenda dari prefetch:", tents);
-            console.log("Total peserta dari prefetch:", participants);
+            if (tents.length === 0) {
+                throw new Error("Data tenda tidak tersedia.");
+            }
 
             setTentTypes(tents);
-            setTotalParticipants(participants);
+            setTotalParticipants(prefetchData.totalParticipants || 0);
             
-            const cachedOrderJSON = localStorage.getItem(`tent_order_${id}`);
-            if (cachedOrderJSON) {
-                console.log("Memuat `order` dari cache:", JSON.parse(cachedOrderJSON));
-                setOrder(JSON.parse(cachedOrderJSON));
+            const cachedOrder = localStorage.getItem(`tent_order_${id}`);
+            if (cachedOrder) {
+                setOrder(JSON.parse(cachedOrder));
             } else {
-                const initialOrder = tents.map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 }));
-                console.log("Membuat `order` awal:", initialOrder);
-                setOrder(initialOrder);
+                setOrder(tents.map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 })));
             }
+
             setPageState('ready');
+
         } catch (error: unknown) {
-            // ...
+            const message = error instanceof Error ? error.message : "Gagal memuat data.";
+            toast.error(message);
+            setPageState('error');
             router.push('/pendaftaran/2-upload-excel');
         }
-    }, [router]); // HANYA `router` sebagai dependensi, yang stabil.
+    }, [router]);
+  
+    const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
+        if (!regId) return;
+        localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
+        const result = await reserveTentsAction(regId, currentOrder);
+        if (!result.success) {
+            toast.error(result.message, { duration: 5000 });
+            if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
+                toast.info("Memuat ulang data stok terbaru...");
+                router.refresh();
+            }
+        }
+    }, [router]);
 
-    // --- useEffect untuk SINKRONISASI ke SERVER ---
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
         if (registrationId && pageState === 'ready') {
-            console.log("Debounce selesai. Memicu sinkronisasi ke server dengan order:", debouncedOrder);
-            
-            // Simpan ke localStorage segera
-            localStorage.setItem(`tent_order_${registrationId}`, JSON.stringify(debouncedOrder));
-            
-            // Panggil action tanpa menunggu (non-blocking)
-            reserveTentsAction(registrationId, debouncedOrder).then(result => {
-                if (!result.success) {
-                    toast.error(result.message);
-                    if (result.message.includes("Stok")) {
-                        // Jika ada error stok, refresh paksa untuk mendapatkan data terbaru
-                        router.refresh(); 
-                    }
-                }
-            });
+            updateReservation(debouncedOrder, registrationId);
         }
-    }, [debouncedOrder, registrationId, pageState, router]);
+    }, [debouncedOrder, registrationId, pageState, updateReservation]);
 
-    // --- FUNGSI UPDATE STATE YANG PALING PENTING ---
+    // Fungsi update state yang dijamin anti-gagal dengan Immer
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => {
-            // Buat salinan baru yang dijamin immutable
-            return produce(currentOrder, draft => {
-                const item = draft.find(i => i.tentTypeId === tentTypeId);
-                if (item) {
-                    item.quantity = Math.max(0, item.quantity + change);
+        setOrder(
+            produce(draft => {
+                const tentItem = draft.find(item => item.tentTypeId === tentTypeId);
+                if (tentItem) {
+                    tentItem.quantity = Math.max(0, tentItem.quantity + change);
                 }
-            });
-        });
+            })
+        );
     };
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
@@ -137,7 +136,6 @@ export default function PilihTendaPage() {
         );
     }
 
-    // Tampilan UI Utama (setelah loading selesai)
     return (
         <Card>
             <CardHeader className="text-center">
@@ -151,7 +149,7 @@ export default function PilihTendaPage() {
                             <CardContent className="p-4 flex items-center gap-4">
                                 <Users className="text-red-600 h-8 w-8 flex-shrink-0" />
                                 <div>
-                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping Anda:</p>
+                                    <p className="text-sm font-semibold text-red-800">Total Rombongan Anda:</p>
                                     <p className="font-bold text-lg text-red-900">{totalParticipants} orang</p>
                                     <p className="text-xs text-red-700">Kapasitas sewa tenda maksimum: {maxCapacityAllowed} orang</p>
                                 </div>
@@ -175,17 +173,14 @@ export default function PilihTendaPage() {
                            return (
                                 <Card key={tent.id} className="overflow-hidden transition-all hover:shadow-lg">
                                     <div className="grid grid-cols-1 sm:grid-cols-3">
-                                        {/* --- KOLOM GAMBAR BARU --- */}
-                                        <div className="sm:col-span-1 relative h-40 sm:h-full">
+                                        <div className="sm:col-span-1 relative h-40 sm:h-full bg-gray-100">
                                             <Image 
-                                                 src={tent.imageUrl || '/default-avatar.png'} // Sediakan gambar fallback
+                                                src={tent.imageUrl || '/default-avatar.png'}
                                                 alt={`Tenda ${tent.name}`} 
-                                                fill // Ganti layout="fill" dengan `fill`
+                                                fill
                                                 className="object-cover"
                                             />
                                         </div>
-
-                                        {/* --- KOLOM KONTEN --- */}
                                         <div className="sm:col-span-2">
                                             <CardContent className="p-4 flex flex-col justify-between h-full">
                                                 <div>
