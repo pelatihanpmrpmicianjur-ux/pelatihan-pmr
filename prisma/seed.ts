@@ -18,7 +18,7 @@ await prisma.tentType.createMany({
     { name: 'Dome', capacityDisplay: '20-25 Orang', capacity: 25, price: 600000, stockInitial: 2, stockAvailable: 2, imageUrl: '/images/tents/dome-20-25.png' },
     { name: 'Family', capacityDisplay: '35-40 Orang', capacity: 40, price: 750000, stockInitial: 5, stockAvailable: 5, imageUrl: '/images/tents/family-35-40.jpg' },
     { name: 'Army Dinsos', capacityDisplay: '40-45 Orang', capacity: 45, price: 950000, stockInitial: 4, stockAvailable: 4, imageUrl: '/images/tents/army-dinsos-40-45.png' },
-    { name: 'Family Dinsos', capacityDisplay: '15-17 Orang', capacity: 17, price: 750000, stockInitial: 5, stockAvailable: 5, imageUrl: '/images/tents/family-dinsos-15-17.jpg' },
+    { name: 'Family Dinsos', capacityDisplay: '15-17 Orang', capacity: 17, price: 550000, stockInitial: 5, stockAvailable: 5, imageUrl: '/images/tents/family-dinsos-15-17.jpg' },
     { name: 'Pleton', capacityDisplay: '80-90 Orang', capacity: 90, price: 1200000, stockInitial: 2, stockAvailable: 2, imageUrl: '/images/tents/pleton-80-90.png' },
     { name: 'Merah Putih Dinsos', capacityDisplay: '100-110 Orang', capacity: 110, price: 1300000, stockInitial: 2, stockAvailable: 2, imageUrl: '/images/tents/merah-putih-dinsos-100-110.jpg' },
   ],

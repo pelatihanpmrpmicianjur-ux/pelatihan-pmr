@@ -30,7 +30,7 @@ export default function PilihTendaPage() {
     const debouncedOrder = useDebounce(order, 750);
 
     // useEffect ini HANYA membaca dari localStorage, membuatnya sangat cepat.
-    useEffect(() => {
+        useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
             toast.error("Sesi tidak ditemukan. Harap kembali ke Langkah 1.");
@@ -134,6 +134,7 @@ export default function PilihTendaPage() {
         );
     }
 
+    // Tampilan UI Utama (setelah loading selesai)
     return (
         <Card>
             <CardHeader className="text-center">
@@ -147,7 +148,7 @@ export default function PilihTendaPage() {
                             <CardContent className="p-4 flex items-center gap-4">
                                 <Users className="text-red-600 h-8 w-8 flex-shrink-0" />
                                 <div>
-                                    <p className="text-sm font-semibold text-red-800">Total Rombongan Anda:</p>
+                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping Anda:</p>
                                     <p className="font-bold text-lg text-red-900">{totalParticipants} orang</p>
                                     <p className="text-xs text-red-700">Kapasitas sewa tenda maksimum: {maxCapacityAllowed} orang</p>
                                 </div>
@@ -171,14 +172,17 @@ export default function PilihTendaPage() {
                            return (
                                 <Card key={tent.id} className="overflow-hidden transition-all hover:shadow-lg">
                                     <div className="grid grid-cols-1 sm:grid-cols-3">
-                                        <div className="sm:col-span-1 relative h-40 sm:h-full bg-gray-100">
+                                        {/* --- KOLOM GAMBAR BARU --- */}
+                                        <div className="sm:col-span-1 relative h-40 sm:h-full">
                                             <Image 
-                                                src={tent.imageUrl || '/default-avatar.png'}
+                                                 src={tent.imageUrl || '/default-avatar.png'} // Sediakan gambar fallback
                                                 alt={`Tenda ${tent.name}`} 
-                                                fill
+                                                fill // Ganti layout="fill" dengan `fill`
                                                 className="object-cover"
                                             />
                                         </div>
+
+                                        {/* --- KOLOM KONTEN --- */}
                                         <div className="sm:col-span-2">
                                             <CardContent className="p-4 flex flex-col justify-between h-full">
                                                 <div>

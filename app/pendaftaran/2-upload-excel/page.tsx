@@ -144,10 +144,6 @@ export default function UploadExcelPage() {
         }
     };
     
-    const handleContinue = () => {
-        router.push('/pendaftaran/3-pilih-tenda');
-    };
-    
     const resetState = () => {
         if (registrationId) {
             localStorage.removeItem(`summary_${registrationId}`);
@@ -235,22 +231,34 @@ const SuccessComponent = ({ summary, onReset }: { summary: Summary, onReset: () 
         }
 
         try {
-            // 1. Prefetch data tenda
-            const tentsRes = await fetch('/api/tents');
-            if (!tentsRes.ok) throw new Error("Gagal menyiapkan data untuk langkah selanjutnya.");
-            const tentsData: TentType[] = await tentsRes.json();
+        console.log("Memulai prefetch untuk langkah selanjutnya...");
+        
+        const tentsRes = await fetch('/api/tents');
+        console.log("Status respons dari /api/tents:", tentsRes.status);
 
-            // 2. Siapkan semua data yang dibutuhkan oleh halaman berikutnya
-            const nextStepData = {
-                tents: tentsData,
-                totalParticipants: summary.pesertaCount + summary.pendampingCount,
-            };
+        if (!tentsRes.ok) {
+            const errorText = await tentsRes.text();
+            console.error("Gagal fetch /api/tents:", errorText);
+            throw new Error("Gagal menyiapkan data tenda.");
+        }
+        
+        const tentsData: TentType[] = await tentsRes.json();
+        console.log("Data tenda yang diterima:", tentsData);
 
-            // 3. Simpan ke localStorage
-            localStorage.setItem(`next_step_data_${registrationId}`, JSON.stringify(nextStepData));
+        if (!tentsData || tentsData.length === 0) {
+            console.error("Data tenda diterima, tetapi kosong!");
+            throw new Error("Data tenda kosong, tidak bisa melanjutkan.");
+        }
 
-            // 4. Navigasi setelah data siap
-            router.push('/pendaftaran/3-pilih-tenda');
+        const nextStepData = {
+            tents: tentsData,
+            totalParticipants: summary.pesertaCount + summary.pendampingCount,
+        };
+
+        console.log("Data yang akan disimpan ke localStorage:", nextStepData);
+        localStorage.setItem(`next_step_data_${registrationId}`, JSON.stringify(nextStepData));
+
+        router.push('/pendaftaran/3-pilih-tenda');
 
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Terjadi kesalahan.";
