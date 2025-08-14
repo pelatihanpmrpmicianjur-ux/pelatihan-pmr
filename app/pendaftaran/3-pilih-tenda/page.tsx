@@ -30,11 +30,11 @@ export default function PilihTendaPage() {
     const isInitialMount = useRef(true);
     const debouncedOrder = useDebounce(order, 750);
 
-    // useEffect ini HANYA membaca dari localStorage, membuatnya sangat cepat.
-        useEffect(() => {
+ useEffect(() => {
+        console.log("Mulai `useEffect` inisialisasi.");
         const id = localStorage.getItem('registrationId');
         if (!id) {
-            toast.error("Sesi tidak ditemukan. Harap kembali ke Langkah 1.");
+            toast.error("Sesi tidak ditemukan.");
             router.push('/pendaftaran/1-data-sekolah');
             return;
         }
@@ -42,69 +42,70 @@ export default function PilihTendaPage() {
 
         try {
             const prefetchDataJSON = localStorage.getItem(`next_step_data_${id}`);
-            if (!prefetchDataJSON) {
-                throw new Error("Data persiapan untuk langkah ini tidak ditemukan.");
-            }
+            if (!prefetchDataJSON) throw new Error("Data persiapan tidak ditemukan.");
             const prefetchData = JSON.parse(prefetchDataJSON);
 
-            setTentTypes(prefetchData.tents || []);
-            setTotalParticipants(prefetchData.totalParticipants || 0);
+            const tents = prefetchData.tents || [];
+            const participants = prefetchData.totalParticipants || 0;
+
+            console.log("Data tenda dari prefetch:", tents);
+            console.log("Total peserta dari prefetch:", participants);
+
+            setTentTypes(tents);
+            setTotalParticipants(participants);
             
-            const cachedOrder = localStorage.getItem(`tent_order_${id}`);
-            if (cachedOrder) {
-                setOrder(JSON.parse(cachedOrder));
+            const cachedOrderJSON = localStorage.getItem(`tent_order_${id}`);
+            if (cachedOrderJSON) {
+                console.log("Memuat `order` dari cache:", JSON.parse(cachedOrderJSON));
+                setOrder(JSON.parse(cachedOrderJSON));
             } else {
-                setOrder((prefetchData.tents || []).map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 })));
+                const initialOrder = tents.map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 }));
+                console.log("Membuat `order` awal:", initialOrder);
+                setOrder(initialOrder);
             }
-
             setPageState('ready');
-
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Gagal memuat data.";
-            toast.error(message);
-            setPageState('error');
+            // ...
             router.push('/pendaftaran/2-upload-excel');
         }
-    }, [router]);
-  
-    const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
-        if (!regId) return;
+    }, [router]); // HANYA `router` sebagai dependensi, yang stabil.
 
-        localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
-        
-        const result = await reserveTentsAction(regId, currentOrder);
-        
-        if (!result.success) {
-            toast.error(result.message, { duration: 5000 });
-            
-            if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
-                toast.info("Memuat ulang data stok terbaru...");
-                router.refresh();
-            }
-        }
-    }, [router]);
-
+    // --- useEffect untuk SINKRONISASI ke SERVER ---
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
         if (registrationId && pageState === 'ready') {
-            updateReservation(debouncedOrder, registrationId);
-        }
-    }, [debouncedOrder, registrationId, pageState, updateReservation]);
-
-    const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(
-            produce(draft => {
-                // `draft` di sini adalah "salinan sementara" dari state `order` saat ini.
-                // Kita bisa "memutasinya" dengan aman.
-                const tentItem = draft.find(item => item.tentTypeId === tentTypeId);
-                if (tentItem) {
-                    tentItem.quantity = Math.max(0, tentItem.quantity + change);
+            console.log("Debounce selesai. Memicu sinkronisasi ke server dengan order:", debouncedOrder);
+            
+            // Simpan ke localStorage segera
+            localStorage.setItem(`tent_order_${registrationId}`, JSON.stringify(debouncedOrder));
+            
+            // Panggil action tanpa menunggu (non-blocking)
+            reserveTentsAction(registrationId, debouncedOrder).then(result => {
+                if (!result.success) {
+                    toast.error(result.message);
+                    if (result.message.includes("Stok")) {
+                        // Jika ada error stok, refresh paksa untuk mendapatkan data terbaru
+                        router.refresh(); 
+                    }
                 }
-            })
-        );
+            });
+        }
+    }, [debouncedOrder, registrationId, pageState, router]);
+
+    // --- FUNGSI UPDATE STATE YANG PALING PENTING ---
+    const handleQuantityChange = (tentTypeId: number, change: number) => {
+        setOrder(currentOrder => {
+            // Buat salinan baru yang dijamin immutable
+            return produce(currentOrder, draft => {
+                const item = draft.find(i => i.tentTypeId === tentTypeId);
+                if (item) {
+                    item.quantity = Math.max(0, item.quantity + change);
+                }
+            });
+        });
     };
   
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
