@@ -40,18 +40,15 @@ export default function PilihTendaPage() {
         setRegistrationId(id);
 
         try {
-            // 1. Baca data yang sudah disiapkan oleh langkah sebelumnya
             const prefetchDataJSON = localStorage.getItem(`next_step_data_${id}`);
             if (!prefetchDataJSON) {
                 throw new Error("Data persiapan untuk langkah ini tidak ditemukan.");
             }
             const prefetchData = JSON.parse(prefetchDataJSON);
 
-            // 2. Isi semua state yang dibutuhkan
             setTentTypes(prefetchData.tents || []);
             setTotalParticipants(prefetchData.totalParticipants || 0);
             
-            // 3. Inisialisasi order, prioritaskan cache order jika ada
             const cachedOrder = localStorage.getItem(`tent_order_${id}`);
             if (cachedOrder) {
                 setOrder(JSON.parse(cachedOrder));
@@ -59,33 +56,26 @@ export default function PilihTendaPage() {
                 setOrder((prefetchData.tents || []).map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 })));
             }
 
-            // 4. Halaman siap ditampilkan
             setPageState('ready');
 
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Gagal memuat data.";
             toast.error(message);
             setPageState('error');
-            // Arahkan kembali ke langkah sebelumnya jika data tidak siap
             router.push('/pendaftaran/2-upload-excel');
         }
     }, [router]);
   
-    // Fungsi ini mengirim pembaruan ke server di latar belakang
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
 
-        // Simpan state UI terbaru ke localStorage sebagai backup cepat
         localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
         
-        // Panggil server action. Tidak ada `setIsUpdating` yang mengunci UI.
         const result = await reserveTentsAction(regId, currentOrder);
         
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
             
-            // Jika gagal karena stok, kita harus memulihkan state dari server.
-            // Kita akan memuat ulang halaman untuk cara yang paling sederhana dan andal.
             if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
                 toast.info("Memuat ulang data stok terbaru...");
                 router.refresh();
@@ -93,7 +83,6 @@ export default function PilihTendaPage() {
         }
     }, [router]);
 
-    // Effect ini memicu `updateReservation` setelah pengguna berhenti berinteraksi
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
@@ -104,7 +93,6 @@ export default function PilihTendaPage() {
         }
     }, [debouncedOrder, registrationId, pageState, updateReservation]);
 
-    // Fungsi untuk mengubah kuantitas (instan di UI)
     const handleQuantityChange = (tentTypeId: number, change: number) => {
         setOrder(currentOrder => 
             currentOrder.map(item => {
@@ -117,8 +105,10 @@ export default function PilihTendaPage() {
         );
     };
   
-    // useMemo untuk kalkulasi biaya dan kapasitas
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
+        if (tentTypes.length === 0) {
+            return { totalCapacitySelected: 0, maxCapacityAllowed: 0, totalCost: 0, isCapacityExceeded: false };
+        }
         const totalCap = order.reduce((acc, item) => {
             const tentType = tentTypes.find(t => t.id === item.tentTypeId);
             return acc + (tentType?.capacity || 0) * item.quantity;
@@ -143,7 +133,7 @@ export default function PilihTendaPage() {
             </div>
         );
     }
-    // Tampilan UI Utama (setelah loading selesai)
+
     return (
         <Card>
             <CardHeader className="text-center">
@@ -157,7 +147,7 @@ export default function PilihTendaPage() {
                             <CardContent className="p-4 flex items-center gap-4">
                                 <Users className="text-red-600 h-8 w-8 flex-shrink-0" />
                                 <div>
-                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping Anda:</p>
+                                    <p className="text-sm font-semibold text-red-800">Total Rombongan Anda:</p>
                                     <p className="font-bold text-lg text-red-900">{totalParticipants} orang</p>
                                     <p className="text-xs text-red-700">Kapasitas sewa tenda maksimum: {maxCapacityAllowed} orang</p>
                                 </div>
@@ -181,17 +171,14 @@ export default function PilihTendaPage() {
                            return (
                                 <Card key={tent.id} className="overflow-hidden transition-all hover:shadow-lg">
                                     <div className="grid grid-cols-1 sm:grid-cols-3">
-                                        {/* --- KOLOM GAMBAR BARU --- */}
-                                        <div className="sm:col-span-1 relative h-40 sm:h-full">
+                                        <div className="sm:col-span-1 relative h-40 sm:h-full bg-gray-100">
                                             <Image 
-                                                 src={tent.imageUrl || '/default-avatar.png'} // Sediakan gambar fallback
+                                                src={tent.imageUrl || '/default-avatar.png'}
                                                 alt={`Tenda ${tent.name}`} 
-                                                fill // Ganti layout="fill" dengan `fill`
+                                                fill
                                                 className="object-cover"
                                             />
                                         </div>
-
-                                        {/* --- KOLOM KONTEN --- */}
                                         <div className="sm:col-span-2">
                                             <CardContent className="p-4 flex flex-col justify-between h-full">
                                                 <div>
