@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { useDebounce } from '@/hooks/use-debounce';
 import { type TentType } from '@prisma/client';
-import { AlertCircle, Tent, Loader2, Users } from 'lucide-react';
+import { AlertCircle, Loader2, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { reserveTentsAction } from '@/actions/registration';
@@ -60,10 +60,12 @@ export default function PilihTendaPage() {
       const cachedOrder = localStorage.getItem(`tent_order_${id}`);
       if (cachedOrder) {
         const parsed = JSON.parse(cachedOrder);
-        const isValid =
-          Array.isArray(parsed) &&
-          parsed.length === tents.length &&
-          parsed.every((o: any) => typeof o.tentTypeId === 'number' && typeof o.quantity === 'number');
+       const isValid =
+  Array.isArray(parsed) &&
+  parsed.length === tents.length &&
+  (parsed as TentOrderItem[]).every(
+    (o) => typeof o.tentTypeId === 'number' && typeof o.quantity === 'number'
+  );
 
         if (isValid) {
           setOrder(parsed);
