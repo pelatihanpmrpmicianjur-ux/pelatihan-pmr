@@ -34,6 +34,17 @@ export async function POST(request: Request) {
             return NextResponse.json({ message: `Sekolah dengan nama "${schoolName}" sudah terdaftar.` }, { status: 409 });
         }
 
+        const existingDraft = await prisma.registration.findFirst({
+            where: { schoolNameNormalized: normalizedName, status: 'DRAFT' }
+        });
+
+if (existingDraft) {
+    return NextResponse.json({ 
+        message: "Sekolah ini sudah memulai pendaftaran namun belum selesai. Sesi draf akan dihapus secara otomatis setelah sekitar 1 jam jika tidak aktif. Silakan coba lagi nanti atau lanjutkan dari perangkat pertama." 
+    }, { status: 409 });
+        }
+
+        // 3. Jika tidak ada pendaftaran final DAN tidak ada draf, baru buat draf baru.
         const newDraft = await prisma.registration.create({
             data: {
                 schoolName,
@@ -47,7 +58,7 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ 
             message: 'Draft pendaftaran berhasil dibuat!',
-            registrationId: newDraft.id 
+            registrationId: newDraft.id,
         }, { status: 201 });
 
     } catch (error) {
