@@ -171,7 +171,7 @@ export default function PilihTendaPage() {
                             <CardContent className="p-4 flex items-center gap-4">
                                 <Users className="text-red-600 h-8 w-8 flex-shrink-0" />
                                 <div>
-                                    <p className="text-sm font-semibold text-red-800">Total Rombongan Anda:</p>
+                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping :</p>
                                     <p className="font-bold text-lg text-red-900">{totalParticipants} orang</p>
                                     <p className="text-xs text-red-700">Kapasitas sewa tenda maksimum: {maxCapacityAllowed} orang</p>
                                 </div>
@@ -242,7 +242,7 @@ export default function PilihTendaPage() {
                                 <CardHeader>
                                     <CardTitle className="text-base flex items-center gap-2">
                                         <Users className="h-4 w-4"/>
-                                        Informasi Rombongan
+                                        Informasi Kontingen
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent className="space-y-2">

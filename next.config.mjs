@@ -3,6 +3,7 @@
 const nextConfig = {
    serverExternalPackages: ['bcrypt', 'bcryptjs'],
   images: {
+    
     remotePatterns: [
       {
         protocol: 'https',
