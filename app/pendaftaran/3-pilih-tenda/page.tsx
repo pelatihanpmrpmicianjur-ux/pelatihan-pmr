@@ -198,9 +198,9 @@ export default function PilihTendaPage() {
                                         {/* --- KOLOM GAMBAR BARU --- */}
                                         <div className="sm:col-span-1 relative h-40 sm:h-full">
                                             <Image 
-                                                src={tent.imageUrl} 
+                                                 src={tent.imageUrl || '/default-avatar.png'} // Sediakan gambar fallback
                                                 alt={`Tenda ${tent.name}`} 
-                                                layout="fill"
+                                                fill // Ganti layout="fill" dengan `fill`
                                                 className="object-cover"
                                             />
                                         </div>

@@ -8,7 +8,6 @@ import { Download } from 'lucide-react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase/client';
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from '@/lib/utils'; // Impor cn untuk Skeleton
 
 // Tipe data spesifik yang SESUAI dengan apa yang dikembalikan oleh API
 type ParticipantData = { 

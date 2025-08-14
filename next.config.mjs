@@ -1,10 +1,7 @@
 // File: next.config.mjs
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Tambahkan ini agar middleware bisa bekerja dengan benar
-  experimental: {
    serverExternalPackages: ['bcrypt', 'bcryptjs'],
-  },
   images: {
     remotePatterns: [
       {
