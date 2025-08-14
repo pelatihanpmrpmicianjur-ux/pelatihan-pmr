@@ -10,7 +10,8 @@ import { type TentType } from '@prisma/client';
 import { AlertCircle, Tent, Loader2, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { getTotalParticipantsAction, reserveTentsAction, getSummaryAction } from '@/actions/registration';
+import { getTotalParticipantsAction, reserveTentsAction } from '@/actions/registration';
+import Image from 'next/image';
 
 type TentOrderItem = {
   tentTypeId: number;
@@ -191,28 +192,42 @@ export default function PilihTendaPage() {
                             const nextTotalCapacity = totalCapacitySelected - (currentQuantity * tent.capacity) + ((currentQuantity + 1) * tent.capacity);
                             const wouldExceedCapacity = nextTotalCapacity > maxCapacityAllowed && maxCapacityAllowed > 0;
                             const isPlusDisabled = currentQuantity >= tent.stockAvailable || wouldExceedCapacity;
-                            return (
-    <Card key={tent.id} className="transition-all hover:shadow-md">
-        <CardContent className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-4 w-full sm:w-auto">
-                <Tent className="h-10 w-10 text-red-500 flex-shrink-0" />
-                <div>
-                    {/* --- PERUBAHAN DI SINI --- */}
-                    <h3 className="font-bold text-lg">{tent.name}</h3>
-                    <p className="text-sm text-muted-foreground">{tent.capacityDisplay}</p>
-                    <p className="text-sm text-green-600 font-semibold mt-1">Rp {tent.price.toLocaleString('id-ID')}</p>
-                    {/* ------------------------- */}
-                </div>
-            </div>
-            <div className="flex-grow sm:flex-grow-0"></div> {/* Spacer */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
-                <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
-                <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
-            </div>
-        </CardContent>
-    </Card>
-);
+                           return (
+                                <Card key={tent.id} className="overflow-hidden transition-all hover:shadow-lg">
+                                    <div className="grid grid-cols-1 sm:grid-cols-3">
+                                        {/* --- KOLOM GAMBAR BARU --- */}
+                                        <div className="sm:col-span-1 relative h-40 sm:h-full">
+                                            <Image 
+                                                src={tent.imageUrl} 
+                                                alt={`Tenda ${tent.name}`} 
+                                                layout="fill"
+                                                className="object-cover"
+                                            />
+                                        </div>
+
+                                        {/* --- KOLOM KONTEN --- */}
+                                        <div className="sm:col-span-2">
+                                            <CardContent className="p-4 flex flex-col justify-between h-full">
+                                                <div>
+                                                    <h3 className="font-bold text-lg">{tent.name}</h3>
+                                                    <p className="text-sm text-muted-foreground">{tent.capacityDisplay}</p>
+                                                    <p className="text-lg text-green-600 font-semibold mt-1">Rp {tent.price.toLocaleString('id-ID')}</p>
+                                                </div>
+                                                <div className="flex items-center justify-between mt-4">
+                                                    <p className={`text-sm font-medium ${tent.stockAvailable < 5 ? 'text-red-500' : 'text-muted-foreground'}`}>
+                                                        Stok Tersisa: {tent.stockAvailable}
+                                                    </p>
+                                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                                        <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, -1)} disabled={currentQuantity === 0}>-</Button>
+                                                        <span className="w-10 text-center font-bold text-lg">{currentQuantity}</span>
+                                                        <Button size="icon" variant="outline" onClick={() => handleQuantityChange(tent.id, 1)} disabled={isPlusDisabled}>+</Button>
+                                                    </div>
+                                                </div>
+                                            </CardContent>
+                                        </div>
+                                    </div>
+                                </Card>
+                            );
                         })}
                         <Card className="bg-slate-50">
                             <CardContent className="p-4">

@@ -97,18 +97,19 @@ model Companion {
 }
 
 model TentType {
-  id             Int      @id @default(autoincrement())
-  name           String   // <-- Kolom baru untuk "Dome", "Family", dll.
-  capacityDisplay String  // <-- Kolom baru untuk "10-12 Orang"
-  capacity       Int      // <-- Tetap ada, akan menyimpan kapasitas MAKSIMUM
-  price          Int
-  stockInitial   Int
-  stockAvailable Int
-  
+  id              Int      @id @default(autoincrement())
+  name            String
+  capacityDisplay String
+  capacity        Int
+  price           Int
+  stockInitial    Int
+  stockAvailable  Int
+  imageUrl        String?   // <-- TAMBAHKAN KOLOM INI
+
   tentBookings     TentBooking[]
   tentReservations TentReservation[]
 
-  @@unique([name, capacity]) // Buat kombinasi nama & kapasitas unik
+  @@unique([name, capacity])
 }
 
 model TentBooking {
