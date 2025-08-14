@@ -31,6 +31,8 @@ export default function PilihTendaPage() {
   const isInitialMount = useRef(true);
   const debouncedOrder = useDebounce(order, 750);
 
+  
+
   // Load data awal
   useEffect(() => {
     const id = localStorage.getItem('registrationId');
@@ -85,6 +87,28 @@ export default function PilihTendaPage() {
     }
   }, [router]);
 
+  useEffect(() => {
+    // Fungsi untuk mengambil data tenda terbaru
+    const refreshTentData = async () => {
+        try {
+            const res = await fetch('/api/tents');
+            if (res.ok) {
+                const newTentsData: TentType[] = await res.json();
+                setTentTypes(newTentsData);
+                console.log("Stok tenda di-refresh secara periodik.");
+            }
+        } catch (error) {
+            console.error("Gagal me-refresh stok tenda:", error);
+        }
+    };
+
+    // Atur interval untuk menjalankan refresh setiap 2 menit (120000 ms)
+    const intervalId = setInterval(refreshTentData, 30000);
+
+    // Fungsi cleanup: Hentikan interval saat komponen di-unmount
+    return () => clearInterval(intervalId);
+}, []); // Jalankan effect ini sekali saat komponen dimuat
+
   const updateReservation = useCallback(
     async (currentOrder: TentOrderItem[], regId: string | null) => {
       if (!regId) return;
@@ -110,6 +134,8 @@ export default function PilihTendaPage() {
       updateReservation(debouncedOrder, registrationId);
     }
   }, [debouncedOrder, registrationId, pageState, updateReservation]);
+
+
 
   const handleQuantityChange = (tentTypeId: number, change: number) => {
     setLoadingTentId(tentTypeId);
