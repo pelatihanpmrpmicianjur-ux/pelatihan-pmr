@@ -10,8 +10,9 @@ import { type TentType } from '@prisma/client';
 import { AlertCircle, Tent, Loader2, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { getTotalParticipantsAction, reserveTentsAction } from '@/actions/registration';
+import { reserveTentsAction } from '@/actions/registration';
 import Image from 'next/image';
+import { produce } from 'immer';
 
 type TentOrderItem = {
   tentTypeId: number;
@@ -94,13 +95,14 @@ export default function PilihTendaPage() {
     }, [debouncedOrder, registrationId, pageState, updateReservation]);
 
     const handleQuantityChange = (tentTypeId: number, change: number) => {
-        setOrder(currentOrder => 
-            currentOrder.map(item => {
-                if (item.tentTypeId === tentTypeId) {
-                    const newQuantity = item.quantity + change;
-                    return { ...item, quantity: Math.max(0, newQuantity) };
+        setOrder(
+            produce(draft => {
+                // `draft` di sini adalah "salinan sementara" dari state `order` saat ini.
+                // Kita bisa "memutasinya" dengan aman.
+                const tentItem = draft.find(item => item.tentTypeId === tentTypeId);
+                if (tentItem) {
+                    tentItem.quantity = Math.max(0, tentItem.quantity + change);
                 }
-                return item;
             })
         );
     };
