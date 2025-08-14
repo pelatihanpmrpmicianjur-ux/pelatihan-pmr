@@ -16,6 +16,7 @@ import { FileUpload } from "@/components/ui/file-upload"; // Nama komponen dari 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { requestUploadUrlAction, processExcelAction } from "@/actions/registration";
+import { TentType } from "@prisma/client";
 
 // Tipe data lengkap yang diharapkan dari API/Action
 type ParticipantPreview = { rowNumber: number | null; fullName: string; birthInfo: string; address: string; religion: string; bloodType: string | null; entryYear: number; phone: string | null; gender: string; photoPath: string | null; };
@@ -203,7 +204,10 @@ export default function UploadExcelPage() {
                 
                 {uploadState === 'success' && summary && (
                     <motion.div key="result-success" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-                        <SuccessComponent summary={summary} onReset={resetState} onContinue={handleContinue} />
+                       <SuccessComponent 
+                            summary={summary} 
+                            onReset={resetState} 
+                        />
                     </motion.div>
                 )}
                  
@@ -217,7 +221,43 @@ export default function UploadExcelPage() {
     );
 }
 
-const SuccessComponent = ({ summary, onReset, onContinue }: { summary: Summary, onReset: () => void, onContinue: () => void }) => {
+const SuccessComponent = ({ summary, onReset }: { summary: Summary, onReset: () => void }) => {
+    const router = useRouter();
+    const [isPreparing, setIsPreparing] = useState(false);
+
+    const handleContinue = async () => {
+        setIsPreparing(true);
+        const registrationId = localStorage.getItem('registrationId');
+        if (!registrationId) {
+            toast.error("Sesi Anda telah berakhir, harap mulai dari awal.");
+            router.push('/pendaftaran/1-data-sekolah');
+            return;
+        }
+
+        try {
+            // 1. Prefetch data tenda
+            const tentsRes = await fetch('/api/tents');
+            if (!tentsRes.ok) throw new Error("Gagal menyiapkan data untuk langkah selanjutnya.");
+            const tentsData: TentType[] = await tentsRes.json();
+
+            // 2. Siapkan semua data yang dibutuhkan oleh halaman berikutnya
+            const nextStepData = {
+                tents: tentsData,
+                totalParticipants: summary.pesertaCount + summary.pendampingCount,
+            };
+
+            // 3. Simpan ke localStorage
+            localStorage.setItem(`next_step_data_${registrationId}`, JSON.stringify(nextStepData));
+
+            // 4. Navigasi setelah data siap
+            router.push('/pendaftaran/3-pilih-tenda');
+
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Terjadi kesalahan.";
+            toast.error(message);
+            setIsPreparing(false);
+        }
+    };
    return (
      <div className="space-y-8">
         <Card>
@@ -244,7 +284,8 @@ const SuccessComponent = ({ summary, onReset, onContinue }: { summary: Summary, 
             </CardContent>
         </Card>
         <div className="flex justify-center">
-            <Button size="lg" className="bg-red-600 hover:bg-red-700" onClick={onContinue}>
+           <Button size="lg" className="bg-red-600 hover:bg-red-700" onClick={handleContinue} disabled={isPreparing}>
+                {isPreparing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Data Sudah Benar, Lanjutkan ke Pilih Tenda
             </Button>
         </div>

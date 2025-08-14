@@ -23,105 +23,88 @@ export default function PilihTendaPage() {
     const [registrationId, setRegistrationId] = useState<string | null>(null);
     const [tentTypes, setTentTypes] = useState<TentType[]>([]);
     const [order, setOrder] = useState<TentOrderItem[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
     const [totalParticipants, setTotalParticipants] = useState(0);
-    const isInitialMount = useRef(true); // Flag untuk render pertama kali
-    const debouncedOrder = useDebounce(order, 750); // Debounce untuk server action
+    const [pageState, setPageState] = useState<'initializing' | 'ready' | 'error'>('initializing');
+    
+    const isInitialMount = useRef(true);
+    const debouncedOrder = useDebounce(order, 750);
 
-    // --- Fungsi untuk memuat data awal (hanya memuat esensi) ---
-    const fetchInitialData = useCallback(async (regId: string) => {
-        setIsLoading(true);
-        try {
-            // Ambil hanya data tenda dan jumlah peserta total (sangat ringan)
-            const [tentsRes, totalResult] = await Promise.all([
-                fetch('/api/tents'), // API Route umum untuk data publik tenda
-                getTotalParticipantsAction(regId) // Server Action khusus yang super cepat
-            ]);
-
-            if (!tentsRes.ok) throw new Error('Gagal memuat data tenda dari server.');
-            const tentsData: TentType[] = await tentsRes.json();
-            
-            if (tentsData.length === 0) {
-                throw new Error("Tipe tenda tidak tersedia. Silakan hubungi panitia.");
-            }
-            if (!totalResult.success) {
-                throw new Error(totalResult.message);
-            }
-            
-            setTentTypes(tentsData);
-            setTotalParticipants(totalResult.total);
-            
-            // Inisialisasi order, prioritaskan dari Server (jika ada reservasi yang sedang berjalan)
-            const initialServerOrderResult = await reserveTentsAction(regId, []); // Panggil action dengan payload kosong untuk ambil order yang ada
-            if (initialServerOrderResult.success && initialServerOrderResult.data?.updatedOrder) {
-                const initialOrder = tentsData.map(tent => {
-                    const existingReservation = initialServerOrderResult.data!.updatedOrder.find(
-                        (res: TentOrderItem) => res.tentTypeId === tent.id
-                    );
-                    return { tentTypeId: tent.id, quantity: existingReservation?.quantity || 0 };
-                });
-                setOrder(initialOrder);
-                localStorage.setItem(`tent_order_${regId}`, JSON.stringify(initialOrder)); // Cache di lokal juga
-            } else {
-                // Jika tidak ada reservasi di server, coba dari localStorage, atau default 0
-                const cachedOrder = localStorage.getItem(`tent_order_${regId}`);
-                if (cachedOrder) {
-                    setOrder(JSON.parse(cachedOrder));
-                } else {
-                    setOrder(tentsData.map(t => ({ tentTypeId: t.id, quantity: 0 })));
-                }
-            }
-
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memuat data.";
-            toast.error(message);
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
-
-    // Effect untuk memicu pengambilan data awal
+    // useEffect ini HANYA membaca dari localStorage, membuatnya sangat cepat.
     useEffect(() => {
         const id = localStorage.getItem('registrationId');
         if (!id) {
-            toast.error("Sesi tidak ditemukan. Harap mulai dari Langkah 1.");
+            toast.error("Sesi tidak ditemukan. Harap kembali ke Langkah 1.");
             router.push('/pendaftaran/1-data-sekolah');
             return;
         }
         setRegistrationId(id);
-        fetchInitialData(id);
-    }, [router, fetchInitialData]);
+
+        try {
+            // 1. Baca data yang sudah disiapkan oleh langkah sebelumnya
+            const prefetchDataJSON = localStorage.getItem(`next_step_data_${id}`);
+            if (!prefetchDataJSON) {
+                throw new Error("Data persiapan untuk langkah ini tidak ditemukan.");
+            }
+            const prefetchData = JSON.parse(prefetchDataJSON);
+
+            // 2. Isi semua state yang dibutuhkan
+            setTentTypes(prefetchData.tents || []);
+            setTotalParticipants(prefetchData.totalParticipants || 0);
+            
+            // 3. Inisialisasi order, prioritaskan cache order jika ada
+            const cachedOrder = localStorage.getItem(`tent_order_${id}`);
+            if (cachedOrder) {
+                setOrder(JSON.parse(cachedOrder));
+            } else {
+                setOrder((prefetchData.tents || []).map((t: TentType) => ({ tentTypeId: t.id, quantity: 0 })));
+            }
+
+            // 4. Halaman siap ditampilkan
+            setPageState('ready');
+
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Gagal memuat data.";
+            toast.error(message);
+            setPageState('error');
+            // Arahkan kembali ke langkah sebelumnya jika data tidak siap
+            router.push('/pendaftaran/2-upload-excel');
+        }
+    }, [router]);
   
-    // --- Fungsi untuk memperbarui reservasi di server (Optimistic UI) ---
+    // Fungsi ini mengirim pembaruan ke server di latar belakang
     const updateReservation = useCallback(async (currentOrder: TentOrderItem[], regId: string | null) => {
         if (!regId) return;
 
-        localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder)); // Update cache lokal
+        // Simpan state UI terbaru ke localStorage sebagai backup cepat
+        localStorage.setItem(`tent_order_${regId}`, JSON.stringify(currentOrder));
         
+        // Panggil server action. Tidak ada `setIsUpdating` yang mengunci UI.
         const result = await reserveTentsAction(regId, currentOrder);
-
+        
         if (!result.success) {
             toast.error(result.message, { duration: 5000 });
-            // Jika gagal karena stok/kapasitas, paksa refresh data tenda dari server
+            
+            // Jika gagal karena stok, kita harus memulihkan state dari server.
+            // Kita akan memuat ulang halaman untuk cara yang paling sederhana dan andal.
             if (result.message.includes("Stok") || result.message.includes("Kapasitas")) {
-                await fetchInitialData(regId); // Panggil ulang untuk mendapatkan stok/order yang benar
+                toast.info("Memuat ulang data stok terbaru...");
+                router.refresh();
             }
         }
-        // Tidak ada toast sukses di sini karena interaksi sudah terasa instan
-    }, [fetchInitialData]);
+    }, [router]);
 
-    // Effect untuk memicu updateReservation setelah debounce
+    // Effect ini memicu `updateReservation` setelah pengguna berhenti berinteraksi
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
-        if (registrationId && !isLoading) { // Pastikan halaman sudah dimuat sepenuhnya
+        if (registrationId && pageState === 'ready') {
             updateReservation(debouncedOrder, registrationId);
         }
-    }, [debouncedOrder, registrationId, updateReservation, isLoading]);
+    }, [debouncedOrder, registrationId, pageState, updateReservation]);
 
-    // Fungsi untuk mengubah kuantitas (instan di UI)
+    // Fungsi ini mengubah kuantitas secara instan di UI
     const handleQuantityChange = (tentTypeId: number, change: number) => {
         setOrder(currentOrder => 
             currentOrder.map(item => {
@@ -134,7 +117,6 @@ export default function PilihTendaPage() {
         );
     };
   
-    // useMemo untuk kalkulasi biaya dan kapasitas
     const { totalCapacitySelected, maxCapacityAllowed, totalCost, isCapacityExceeded } = useMemo(() => {
         const totalCap = order.reduce((acc, item) => {
             const tentType = tentTypes.find(t => t.id === item.tentTypeId);
@@ -145,11 +127,15 @@ export default function PilihTendaPage() {
             const tentType = tentTypes.find(t => t.id === item.tentTypeId);
             return total + (tentType?.price || 0) * item.quantity;
         }, 0);
-        return { totalCapacitySelected: totalCap, maxCapacityAllowed: maxCap, totalCost: cost, isCapacityExceeded: totalCap > maxCap && maxCap > 0 };
+        return {
+            totalCapacitySelected: totalCap,
+            maxCapacityAllowed: maxCap,
+            totalCost: cost,
+            isCapacityExceeded: totalCap > maxCap && maxCap > 0,
+        };
     }, [order, tentTypes, totalParticipants]);
 
-    // Tampilan Loading Awal
-    if (isLoading) {
+    if (pageState !== 'ready') {
         return (
             <div className="flex justify-center items-center h-[calc(100vh-200px)]">
                 <Loader2 className="h-10 w-10 animate-spin text-red-600" />
@@ -171,7 +157,7 @@ export default function PilihTendaPage() {
                             <CardContent className="p-4 flex items-center gap-4">
                                 <Users className="text-red-600 h-8 w-8 flex-shrink-0" />
                                 <div>
-                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping :</p>
+                                    <p className="text-sm font-semibold text-red-800">Total Peserta dan Pendamping Anda:</p>
                                     <p className="font-bold text-lg text-red-900">{totalParticipants} orang</p>
                                     <p className="text-xs text-red-700">Kapasitas sewa tenda maksimum: {maxCapacityAllowed} orang</p>
                                 </div>
