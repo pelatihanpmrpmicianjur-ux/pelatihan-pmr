@@ -216,13 +216,17 @@ export async function processExcelAction(registrationId: string, filePath: strin
                 photoPath: null,
             };
 
-            if (imageMap.has(rowNumber)) {
-                const matchedImage = imageMap.get(rowNumber);
-                // Kita tidak lagi butuh imageIdToProcess, langsung simpan buffer-nya
-                (rowData as any).imageBufferToProcess = matchedImage?.buffer; 
-                console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): GAMBAR DITEMUKAN.`);
-            } else {
-                 console.log(`[PHOTO_DEBUG] Baris ${rowNumber} (${rowData.fullName}): TIDAK ADA GAMBAR COCOK.`);
+             const imageRef = images.find(img => {
+                if (!img.range?.tl) return false;
+                const range = img.range;
+                const isCorrectColumn = range.tl.nativeCol === 9;
+                if (!isCorrectColumn) return false;
+                if (!range.br) return (range.tl.nativeRow + 1) === rowNumber;
+                return rowNumber >= (range.tl.nativeRow + 1) && rowNumber <= (range.br.nativeRow + 1);
+            });
+
+            if (imageRef) {
+                rowData.imageIdToProcess = imageRef.imageId;
             }
             
             pesertaData.push(rowData);
@@ -399,7 +403,15 @@ export async function getTotalParticipantsAction(registrationId: string): Promis
 export async function reserveTentsAction(
     registrationId: string, 
     reservations: { tentTypeId: number, quantity: number }[]
-): Promise<{ success: boolean; message: string; data?: { updatedOrder: { tentTypeId: number, quantity: number }[] } }> {
+// --- PERBAIKI TIPE KEMBALIAN DI SINI ---
+): Promise<{ 
+    success: boolean; 
+    message: string; 
+    data?: { 
+        expiresAt?: string; // <-- Tambahkan `expiresAt` sebagai string opsional
+        updatedOrder: { tentTypeId: number, quantity: number }[] 
+    } 
+}> {
     const RESERVATION_DURATION_MINUTES = 15;
 
     console.log(`\n--- [ACTION] reserveTentsAction Dimulai untuk regId: ${registrationId} ---`);
@@ -411,26 +423,36 @@ export async function reserveTentsAction(
     }
 
     try {
+        // 1. Ambil data registrasi yang relevan. Kita hanya butuh biaya yang sudah ada
+        //    dan count dari relasi untuk validasi.
         const registration = await prisma.registration.findUnique({
             where: { id: registrationId },
-            include: { 
-                participants: { select: { id: true } }, // Hanya select ID untuk efisiensi
-                companions: { select: { id: true } } 
+            select: { 
+                totalCostPeserta: true,
+                totalCostPendamping: true,
+                _count: { // Gunakan `_count` yang sangat efisien
+                    select: {
+                        participants: true,
+                        companions: true,
+                    }
+                }
             }
         });
+
         if (!registration) {
-            console.error("[ACTION] Validasi gagal: pendaftaran tidak ditemukan.");
             return { success: false, message: 'Pendaftaran tidak ditemukan.' };
         }
         
-        const totalParticipants = registration.participants.length + registration.companions.length;
+        // 2. Lakukan validasi kapasitas
+        const totalParticipants = registration._count.participants + registration._count.companions;
         const maxCapacityAllowed = totalParticipants > 0 ? totalParticipants + 10 : 0;
         
-        let totalCapacityRequested = 0;
+        // Ambil tipe tenda dalam satu query untuk efisiensi
         const tentTypes = await prisma.tentType.findMany({
             where: { id: { in: reservations.map(r => r.tentTypeId) } }
         });
 
+        let totalCapacityRequested = 0;
         for (const res of reservations) {
             if (res.quantity > 0) {
                 const tentType = tentTypes.find(t => t.id === res.tentTypeId);
@@ -442,15 +464,13 @@ export async function reserveTentsAction(
             return { success: false, message: `Kapasitas tenda yang diminta (${totalCapacityRequested}) melebihi batas maksimum (${maxCapacityAllowed}).` };
         }
 
+        // 3. Lakukan semua operasi database di dalam satu transaksi
         const expiresAt = new Date(Date.now() + RESERVATION_DURATION_MINUTES * 60 * 1000);
 
-  await prisma.$transaction(async (tx) => {
-            console.log("[TRANSACTION] Memulai.");
-            // 1. Lepaskan reservasi lama
-            const oldReservations = await tx.tentReservation.findMany({ where: { registrationId }, select: { tentTypeId: true, quantity: true }});
-            console.log(`[TRANSACTION] Menemukan ${oldReservations.length} reservasi lama untuk dilepaskan.`);
+        await prisma.$transaction(async (tx) => {
+            // Lepaskan reservasi lama & kembalikan stok
+            const oldReservations = await tx.tentReservation.findMany({ where: { registrationId } });
             if (oldReservations.length > 0) {
-                // 2. Kembalikan semua stok lama dalam beberapa panggilan paralel, BUKAN loop serial
                 const restoreStockPromises = oldReservations.map(oldRes => 
                     tx.tentType.update({
                         where: { id: oldRes.tentTypeId },
@@ -458,29 +478,19 @@ export async function reserveTentsAction(
                     })
                 );
                 await Promise.all(restoreStockPromises);
-                
-                // 3. Hapus semua reservasi lama dalam satu panggilan
-                 await tx.tentReservation.deleteMany({ where: { registrationId } });
-                console.log("[TRANSACTION] Reservasi lama berhasil dihapus.");
+                await tx.tentReservation.deleteMany({ where: { registrationId } });
             }
 
-            // 4. Buat semua reservasi baru
-             const reservationsToCreate = reservations.filter(r => r.quantity > 0);
-            console.log(`[TRANSACTION] Ditemukan ${reservationsToCreate.length} item di payload dengan kuantitas > 0 untuk dibuat.`);
+            // Buat reservasi baru & kurangi stok
+            const reservationsToCreate = reservations.filter(r => r.quantity > 0);
             if (reservationsToCreate.length > 0) {
-
-                // 5. Ambil semua stok baru secara paralel
                 const takeStockPromises = reservationsToCreate.map(res =>
                     tx.tentType.update({
                         where: { id: res.tentTypeId, stockAvailable: { gte: res.quantity } },
                         data: { stockAvailable: { decrement: res.quantity } },
                     })
                 );
-                console.log("[TRANSACTION] Stok berhasil dikurangi. Mencoba membuat record baru...");
-                // Menjalankan ini akan melempar error jika ada stok yang tidak cukup
                 await Promise.all(takeStockPromises);
-
-                // 6. Buat semua record reservasi baru dalam SATU panggilan
                 await tx.tentReservation.createMany({
                     data: reservationsToCreate.map(res => ({
                         registrationId,
@@ -489,10 +499,9 @@ export async function reserveTentsAction(
                         expiresAt
                     }))
                 });
-                console.log(`[TRANSACTION] Berhasil membuat ${reservationsToCreate.length} record TentReservation baru.`);
             }
 
-            // 3. Hitung dan update total biaya tenda di pendaftaran
+            // Hitung biaya tenda baru
             const newTentCost = reservations.reduce((acc, res) => {
                 if (res.quantity > 0) {
                     const tentType = tentTypes.find(t => t.id === res.tentTypeId);
@@ -500,28 +509,38 @@ export async function reserveTentsAction(
                 }
                 return acc;
             }, 0); 
+
+            // *** PERBAIKAN: Hitung dan simpan grandTotal ***
+            const newGrandTotal = (registration.totalCostPeserta || 0) + 
+                                  (registration.totalCostPendamping || 0) + 
+                                  newTentCost;
             
-            await tx.registration.update({ where: { id: registrationId }, data: { totalCostTenda: newTentCost } });
-       console.log("[TRANSACTION] Selesai.");
+            await tx.registration.update({ 
+                where: { id: registrationId }, 
+                data: { 
+                    totalCostTenda: newTentCost,
+                    grandTotal: newGrandTotal
+                } 
+            });
         });
 
-        // 4. Ambil data reservasi terbaru untuk dikirim kembali ke frontend
+        // 4. Ambil data reservasi terbaru untuk dikembalikan ke frontend
         const newReservations = await prisma.tentReservation.findMany({
             where: { registrationId },
             select: { tentTypeId: true, quantity: true }
         });
-        console.log(`[ACTION] Sukses. Data final di DB: ${JSON.stringify(newReservations, null, 2)}`);
         
         return { 
             success: true, 
             message: 'Reservasi tenda berhasil diperbarui.', 
-            data: { updatedOrder: newReservations } 
+            data: { 
+                expiresAt: expiresAt.toISOString(), 
+                updatedOrder: newReservations 
+            } 
         };
 
     } catch (error: unknown) {
-        console.error('[RESERVE_TENT_ACTION_ERROR]', error);
         let errorMessage = 'Gagal melakukan reservasi tenda.';
-        // Tangani error spesifik dari Prisma jika stok tidak cukup
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025') {
             errorMessage = 'Stok tenda tidak mencukupi untuk jumlah yang diminta.';
         } else if (error instanceof Error) {
@@ -597,14 +616,6 @@ export async function getSummaryAction(registrationId: string): Promise<{ succes
         const participantCount = await prisma.participant.count({ where: { registrationId }});
         const companionCount = await prisma.companion.count({ where: { registrationId }});
 
-        const grandTotal = registration.totalCostPeserta + registration.totalCostPendamping + registration.totalCostTenda;
-        
-        // Update grand total di DB
-        // Ini adalah "side effect", tapi bisa diterima di sini.
-        await prisma.registration.update({
-            where: { id: registrationId },
-            data: { grandTotal }
-        });
 
         // Sajikan data yang sudah dirapikan sesuai tipe SummaryData
         const responseData: SummaryData = {
@@ -618,7 +629,7 @@ export async function getSummaryAction(registrationId: string): Promise<{ succes
                 peserta: registration.totalCostPeserta,
                 pendamping: registration.totalCostPendamping,
                 tenda: registration.totalCostTenda,
-                grandTotal: grandTotal,
+                grandTotal: registration.grandTotal, 
             },
             participantSummary: {
                 count: participantCount,
@@ -909,53 +920,25 @@ export async function submitRegistrationAction(registrationId: string, formData:
         return { success: false, message: 'Bukti pembayaran wajib diunggah.' };
     }
 
-    const registration = await prisma.registration.findFirst({ 
-        where: { id: registrationId, status: 'DRAFT' } 
-    });
-
-    if (!registration) {
-        return { success: false, message: 'Pendaftaran tidak ditemukan atau sudah disubmit.' };
-    }
+   const registration = await prisma.registration.findFirst({ where: { id: registrationId, status: 'DRAFT' } });
+    if (!registration) return { success: false, message: 'Pendaftaran tidak ditemukan atau sudah disubmit.' };
 
     const schoolSlug = slugify(registration.schoolNameNormalized);
     const orderId = generateOrderId(registration.schoolName);
 
     try {
-        // --- Langkah 1: Upload bukti pembayaran (Operasi I/O Kritis) ---
         const proofPath = `temp/${schoolSlug}/payment_proofs/${Date.now()}_${paymentProof.name}`;
-        
-        const { error: uploadError } = await supabaseAdmin.storage
-            .from('registrations')
-            .upload(proofPath, paymentProof, { upsert: true });
+        await supabaseAdmin.storage.from('registrations').upload(proofPath, paymentProof, { upsert: true });
 
-        if (uploadError) {
-            throw new Error(`Gagal mengunggah bukti pembayaran: ${uploadError.message}`);
-        }
-
-         await prisma.$transaction(async (tx) => {
-            
-            // --- LOGIKA BARU: Perpanjang masa berlaku reservasi tenda ---
-            // Beri waktu, misalnya, 7 hari dari sekarang agar admin punya waktu untuk verifikasi
+        await prisma.$transaction(async (tx) => {
             const newExpiryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
-
-            const updatedReservations = await tx.tentReservation.updateMany({
+            await tx.tentReservation.updateMany({
                 where: { registrationId: registrationId },
                 data: { expiresAt: newExpiryDate }
             });
-
-            if (updatedReservations.count > 0) {
-                console.log(`[ACTION] Berhasil memperpanjang ${updatedReservations.count} reservasi tenda untuk regId: ${registrationId}`);
-            }
-            // -----------------------------------------------------------
-            
-            // Lanjutkan dengan update status registrasi
             await tx.registration.update({
                 where: { id: registrationId },
-                data: {
-                    status: 'SUBMITTED',
-                    customOrderId: orderId,
-                    paymentProofTempPath: proofPath,
-                }
+                data: { status: 'SUBMITTED', customOrderId: orderId, paymentProofTempPath: proofPath }
             });
         });
     } catch (error: unknown) {
@@ -1068,10 +1051,8 @@ export async function submitRegistrationAction(registrationId: string, formData:
         const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')},-`;
         
         // Gunakan count dari `dataForReceipt._count`
-        const participantCount = dataForReceipt._count.participants;
+const participantCount = dataForReceipt._count.participants;
         const companionCount = dataForReceipt._count.companions;
-
-        // Gunakan biaya dari `dataForReceipt`
         const rows = [
             ["Biaya Pendaftaran Peserta", `${participantCount} orang`, formatCurrency(dataForReceipt.totalCostPeserta)],
             ...(companionCount > 0 ? [["Biaya Pendaftaran Pendamping", `${companionCount} orang`, formatCurrency(dataForReceipt.totalCostPendamping)]] : []),
@@ -1132,29 +1113,29 @@ export async function submitRegistrationAction(registrationId: string, formData:
 
 export async function deleteRegistrationAction(registrationId: string): Promise<ActionResult> {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-        return { success: false, message: 'Unauthorized' };
-    }
+    if (!session?.user?.id) return { success: false, message: 'Unauthorized' };
 
     try {
-        // 1. Ambil data pendaftaran SEBELUM dihapus untuk mendapatkan path file
         const registrationToDelete = await prisma.registration.findUnique({
             where: { id: registrationId },
             select: { schoolNameNormalized: true }
         });
+        if (!registrationToDelete) return { success: false, message: "Pendaftaran tidak ditemukan." };
 
-        if (!registrationToDelete) {
-            return { success: false, message: "Pendaftaran tidak ditemukan." };
+        // Lakukan penghapusan file secara langsung
+        const schoolSlug = slugify(registrationToDelete.schoolNameNormalized);
+        const folders = [`temp/${schoolSlug}`, `permanen/${schoolSlug}`];
+        for (const folder of folders) {
+            const { data: files } = await supabaseAdmin.storage.from('registrations').list(folder);
+            if (files && files.length > 0) {
+                const pathsToDelete = files.map(file => `${folder}/${file.name}`);
+                await supabaseAdmin.storage.from('registrations').remove(pathsToDelete);
+            }
         }
+        
+        // Hapus record dari DB (cascade akan berjalan)
+        await prisma.registration.delete({ where: { id: registrationId } });
 
-        // 2. Hapus record dari database (onDelete: Cascade akan menangani relasi)
-        await prisma.registration.delete({
-            where: { id: registrationId }
-        });
-
-        // 3. Masukkan job ke antrian untuk menghapus file-file di storage
-
-        // Revalidate path dashboard dan halaman data lainnya
         revalidatePath('/admin/dashboard');
         revalidatePath('/admin/participants');
         revalidatePath('/admin/companions');
@@ -1168,7 +1149,7 @@ export async function deleteRegistrationAction(registrationId: string): Promise<
     }
 }
 
-export async function getRegistrationDetailsAction(registrationId: string): Promise<RegistrationDetail | null> {
+export async function getRegistrationDetailsAction(registrationId: string, ): Promise<RegistrationDetail | null> {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.error("Unauthorized attempt to get registration details.");
@@ -1184,11 +1165,14 @@ export async function getRegistrationDetailsAction(registrationId: string): Prom
                 tentBookings: { include: { tentType: true } },
                 tentReservations: { include: { tentType: true } },
             }
+            
         });
 
         if (!registration) {
             return null;
         }
+
+        
         
         const createSignedUrl = async (path: string | null) => {
             if (!path) return null;
