@@ -500,10 +500,26 @@ export async function reserveTentsAction(
                 }
                 return acc;
             }, 0); 
+
+                const newGrandTotal = 
+                (registration.totalCostPeserta || 0) + 
+                (registration.totalCostPendamping || 0) + 
+                newTentCost;
+
+            // Update SEMUA biaya terkait dalam satu panggilan
+            await tx.registration.update({ 
+                where: { id: registrationId }, 
+                data: { 
+                    totalCostTenda: newTentCost,
+                    grandTotal: newGrandTotal // <-- Sekarang `grandTotal` di-update di sini
+                } 
+            });
             
             await tx.registration.update({ where: { id: registrationId }, data: { totalCostTenda: newTentCost } });
        console.log("[TRANSACTION] Selesai.");
         });
+
+
 
         // 4. Ambil data reservasi terbaru untuk dikirim kembali ke frontend
         const newReservations = await prisma.tentReservation.findMany({
