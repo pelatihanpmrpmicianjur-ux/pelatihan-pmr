@@ -902,12 +902,39 @@ export async function rejectRegistrationAction(registrationId: string, reason: s
     }
 }
 
-function generateOrderId(schoolName: string): string {
-  const timestamp = new Date().getTime();
-  const month = new Date().toLocaleString('id-ID', { month: 'short' }).toUpperCase();
-  const year = new Date().getFullYear();
-  const schoolPart = slugify(schoolName).substring(0, 15).toUpperCase();
-  return `${schoolPart}-${timestamp}/PP-PMICJR/${month}/${year}`;
+/**
+ * Membuat Order ID yang berurutan dan deskriptif.
+ * Format: [Nomor Urut]-[Nama Sekolah]/PMR-CJR/[Bulan Romawi]/[Tahun]
+ * Contoh: 01-SMKN-1-CIPANAS/PMR-CJR/VIII/2025
+ * @param schoolName Nama sekolah dari input pengguna.
+ * @returns Promise yang resolve menjadi string Order ID.
+ */
+async function generateOrderId(schoolName: string): Promise<string> {
+  // 1. Dapatkan nomor urut berikutnya
+  // Hitung berapa banyak pendaftaran yang sudah "final" (bukan DRAFT)
+  const existingRegistrationsCount = await prisma.registration.count({
+    where: {
+      status: {
+        not: 'DRAFT' // Hitung semua yang sudah SUBMITTED, CONFIRMED, atau REJECTED
+      }
+    }
+  });
+
+  const nextRegistrationNumber = existingRegistrationsCount + 1;
+  // Format menjadi dua digit dengan nol di depan jika perlu (misal: 1 -> "01")
+  const formattedRegistrationNumber = String(nextRegistrationNumber).padStart(2, '0');
+
+  // 2. Siapkan bagian lain dari ID
+  const schoolPart = slugify(schoolName).substring(0, 20).toUpperCase();
+  const date = new Date();
+  const year = date.getFullYear();
+
+  // 3. Konversi bulan menjadi angka Romawi
+  const romanMonths = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
+  const month = romanMonths[date.getMonth()]; // getMonth() mengembalikan 0-11
+
+  // 4. Gabungkan semuanya
+  return `${formattedRegistrationNumber}-${schoolPart}/PMR-CJR/${month}/${year}`;
 }
 
 export async function submitRegistrationAction(registrationId: string, formData: FormData): Promise<{ success: boolean; message: string; orderId?: string }> {
@@ -924,9 +951,9 @@ export async function submitRegistrationAction(registrationId: string, formData:
     if (!registration) {
         return { success: false, message: 'Pendaftaran tidak ditemukan atau sudah disubmit.' };
     }
-
+    
     const schoolSlug = slugify(registration.schoolNameNormalized);
-    const orderId = generateOrderId(registration.schoolName);
+    const orderId = await generateOrderId(registration.schoolName);
 
     try {
         // --- Langkah 1: Upload bukti pembayaran (Operasi I/O Kritis) ---
