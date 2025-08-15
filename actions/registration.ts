@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import sharp from 'sharp';
 import qrcode from 'qrcode';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import path from 'path';
 // Definisikan tipe untuk hasil (return value) dari action
 type ActionResult = {
     success: boolean;
