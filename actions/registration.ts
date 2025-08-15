@@ -713,14 +713,11 @@ export async function confirmRegistrationAction(registrationId: string): Promise
         console.log(`[ACTION] Memulai finalisasi untuk: ${registrationId}`);
         const schoolSlug = slugify(registration.schoolNameNormalized);
         
-        // --- Tahap 1: Siapkan dan jalankan SEMUA operasi file secara paralel ---
+        // --- Tahap 1: Siapkan semua operasi file ---
         const fileOperations: Promise<any>[] = [];
         
-        // Operasi untuk Excel, Bukti Bayar, dan Kwitansi
-        const fileTypes: ('excelTempPath' | 'paymentProofTempPath' | 'receiptTempPath')[] = [
-            'excelTempPath', 'paymentProofTempPath', 'receiptTempPath'
-        ];
-        const folderNames = {
+        const fileTypes: ('excelTempPath' | 'paymentProofTempPath' | 'receiptTempPath')[] = ['excelTempPath', 'paymentProofTempPath', 'receiptTempPath'];
+        const folderNames: Record<typeof fileTypes[number], string> = {
             excelTempPath: 'excel',
             paymentProofTempPath: 'payment_proofs',
             receiptTempPath: 'receipts'
@@ -733,12 +730,11 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 const toPath = `permanen/${schoolSlug}/${folderNames[fileType]}/${fileName}`;
                 fileOperations.push(
                     supabaseAdmin.storage.from('registrations').move(tempPath, toPath)
-                        .then(result => ({ type: fileType, path: result.error ? null : toPath, error: result.error }))
+                        .then(({ error }) => ({ type: fileType, path: error ? null : toPath, error }))
                 );
             }
         });
 
-        // Operasi untuk Foto-foto
         const tempPhotoDir = `temp/${schoolSlug}/photos/`;
         const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
         const permanentPhotoDir = `permanen/${schoolSlug}/photos/`;
@@ -749,40 +745,45 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 const toPath = `${permanentPhotoDir}${file.name}`;
                 fileOperations.push(
                     supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
-                        .then(result => ({ type: 'photo', fromPath, toPath: result.error ? null : toPath, error: result.error }))
+                        .then(({ error }) => ({ type: 'photo', fromPath, toPath: error ? null : toPath, error }))
                 );
             }
         }
         
+        // --- Tahap 2: Jalankan operasi file & proses hasilnya ---
         console.log(`[ACTION] Menjalankan ${fileOperations.length} operasi file secara paralel...`);
         const results = await Promise.all(fileOperations);
-        console.log(`[ACTION] Operasi file selesai.`);
+
+        // --- TAMBAHKAN LOG DIAGNOSTIK KRUSIAL ---
+        console.log("[ACTION] Hasil dari Promise.all:", JSON.stringify(results, null, 2));
         
-        // --- Tahap 2: Proses hasil dan siapkan data untuk DB ---
-        const permanentPaths = {
+        const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
+
+        // --- PERBAIKAN: Gunakan .reduce() untuk membangun `permanentPaths` dengan aman ---
+        const permanentPaths = results.reduce((acc, res) => {
+            if (res && !res.error) {
+                switch(res.type) {
+                    case 'excelTempPath': acc.excelPath = res.path; break;
+                    case 'paymentProofTempPath': acc.paymentProofPath = res.path; break;
+                    case 'receiptTempPath': acc.receiptPath = res.path; break;
+                    case 'photo': if(res.toPath) photoPathUpdates.push({ fromPath: res.fromPath, toPath: res.toPath }); break;
+                }
+            } else if (res && res.error) {
+                console.error(`Gagal memindahkan file (tipe: ${res.type}):`, res.error.message);
+            }
+            return acc;
+        }, {
             excelPath: null as string | null,
             paymentProofPath: null as string | null,
             photosPath: null as string | null,
             receiptPath: null as string | null,
-        };
-        const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
-
-        results.forEach(res => {
-            if (res && !res.error) {
-                switch(res.type) {
-                    case 'excelTempPath': permanentPaths.excelPath = res.path; break;
-                    case 'paymentProofTempPath': permanentPaths.paymentProofPath = res.path; break;
-                    case 'receiptTempPath': permanentPaths.receiptPath = res.path; break;
-                    case 'photo': photoPathUpdates.push({ fromPath: res.fromPath, toPath: res.toPath }); break;
-                }
-            } else if (res && res.error) {
-                console.error(`Gagal memindahkan file:`, res.error.message);
-            }
         });
 
-        if (photoFiles && photoFiles.length > 0) {
+        if (photoPathUpdates.length > 0) {
             permanentPaths.photosPath = permanentPhotoDir;
         }
+
+        console.log("[ACTION] Path permanen yang akan disimpan ke DB:", permanentPaths);
 
         // --- Tahap 3: Lakukan transaksi database yang bersih ---
         console.log(`[ACTION] Memulai transaksi database...`);
