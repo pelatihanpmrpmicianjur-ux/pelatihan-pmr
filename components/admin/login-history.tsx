@@ -1,7 +1,7 @@
 // File: components/admin/login-history.tsx
 'use client';
 import { useEffect, useState } from "react";
-import { getLoginHistory } from "@/app/admin/dashboard/page"; // Impor server action
+import { getLoginHistory } from "@/actions/registration"; // Impor server action
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area"; // npx shadcn-ui@latest add scroll-area
 import { Badge } from "@/components/ui/badge";

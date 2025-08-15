@@ -5,12 +5,12 @@ import { useState, useEffect, useTransition, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import Link from "next/link";
-import { getRegistrations, RegistrationWithTents } from "@/app/admin/dashboard/page";
 import { 
     confirmRegistrationAction, 
     rejectRegistrationAction, 
     deleteRegistrationAction,
-    getRegistrationDetailsAction // Impor ini juga dari actions
+    getRegistrationDetailsAction,
+    getRegistrations, RegistrationWithTents  // Impor ini juga dari actions
 } from "@/actions/registration";
 
 import { Button } from "@/components/ui/button";
