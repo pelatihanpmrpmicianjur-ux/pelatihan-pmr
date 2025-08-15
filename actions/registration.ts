@@ -697,57 +697,95 @@ export async function getReceiptUrlAction(registrationId: string): Promise<Recei
 export async function confirmRegistrationAction(registrationId: string): Promise<{ success: boolean; message: string; }> {
     const session = await getServerSession(authOptions);
     const adminId = (session?.user as any)?.id;
-    if (!adminId) return { success: false, message: 'Akses ditolak.' };
+    if (!adminId) {
+        return { success: false, message: 'Akses ditolak. Anda harus login sebagai admin.' };
+    }
 
     try {
         const registration = await prisma.registration.findFirst({
             where: { id: registrationId, status: 'SUBMITTED' }
         });
-        if (!registration) return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid.' };
+        
+        if (!registration) {
+            return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid untuk dikonfirmasi.' };
+        }
         
         console.log(`[ACTION] Memulai finalisasi untuk: ${registrationId}`);
         const schoolSlug = slugify(registration.schoolNameNormalized);
         
-        const permanentPaths: Prisma.RegistrationUpdateInput = {}; // Objek untuk update DB
+        const permanentPathsToUpdate: Prisma.RegistrationUpdateInput = {};
         const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
-
-        // --- Tahap 1: Pindahkan file-file utama ---
+        
+        // --- Tahap 1: Operasi Pemindahan File ---
+        
+        const mainFilesToMove: Promise<any>[] = [];
         const mainFileTypes: ('excelTempPath' | 'paymentProofTempPath' | 'receiptTempPath')[] = ['excelTempPath', 'paymentProofTempPath', 'receiptTempPath'];
-        // ... (logika pemindahan file utama tidak berubah, masih bisa paralel)
+        const folderNames: Record<typeof mainFileTypes[number], string> = {
+            excelTempPath: 'excel',
+            paymentProofTempPath: 'payment_proofs',
+            receiptTempPath: 'receipts'
+        };
 
-        // --- Tahap 2: Pindahkan foto secara berkelompok (BATCHING) ---
+        mainFileTypes.forEach(fileType => {
+            const tempPath = registration[fileType];
+            if (tempPath) {
+                const fileName = path.basename(tempPath);
+                const toPath = `permanen/${schoolSlug}/${folderNames[fileType]}/${fileName}`;
+                mainFilesToMove.push(
+                    supabaseAdmin.storage.from('registrations').move(tempPath, toPath)
+                        .then(({ error }) => {
+                            if (!error) {
+                                // Tentukan properti yang akan diupdate berdasarkan tipe file
+                                const key = fileType.replace('TempPath', 'Path') as keyof typeof permanentPathsToUpdate;
+                                permanentPathsToUpdate[key] = toPath;
+                            } else {
+                                console.error(`Gagal memindahkan file ${fileType}:`, error.message);
+                            }
+                        })
+                );
+            }
+        });
+        
+        // Jalankan pemindahan file utama secara paralel
+        await Promise.all(mainFilesToMove);
+
+        // Pindahkan foto secara berkelompok (batching) untuk menghindari beban berlebih
         const tempPhotoDir = `temp/${schoolSlug}/photos/`;
         const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
         
         if (photoFiles && photoFiles.length > 0) {
-            permanentPaths.photosPath = `permanen/${schoolSlug}/photos/`;
-            const BATCH_SIZE = 10; // Pindahkan 10 foto sekaligus
+            permanentPathsToUpdate.photosPath = `permanen/${schoolSlug}/photos/`;
+            const BATCH_SIZE = 10;
             
             for (let i = 0; i < photoFiles.length; i += BATCH_SIZE) {
                 const batch = photoFiles.slice(i, i + BATCH_SIZE);
-                console.log(`[ACTION] Memproses batch foto ${i / BATCH_SIZE + 1}...`);
+                console.log(`[ACTION] Memproses batch foto ${i / BATCH_SIZE + 1} dari ${Math.ceil(photoFiles.length / BATCH_SIZE)}...`);
                 
                 const movePromises = batch.map(file => {
                     const fromPath = `${tempPhotoDir}${file.name}`;
-                    const toPath = `${permanentPaths.photosPath}${file.name}`;
+                    const toPath = `${permanentPathsToUpdate.photosPath}${file.name}`;
                     return supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
                         .then(({ error }) => {
-                            if (!error) photoPathUpdates.push({ fromPath, toPath });
-                            else console.error(`Gagal memindahkan foto ${fromPath}:`, error.message);
+                            if (!error) {
+                                photoPathUpdates.push({ fromPath, toPath });
+                            } else {
+                                console.error(`Gagal memindahkan foto ${fromPath}:`, error.message);
+                            }
                         });
                 });
                 
                 await Promise.all(movePromises);
             }
         }
+        console.log(`[ACTION] Semua operasi file selesai.`);
         
-        // --- Tahap 3: Lakukan satu transaksi database besar dengan timeout yang lebih panjang ---
+        // --- Tahap 2: Lakukan satu transaksi database besar ---
         console.log(`[ACTION] Memulai transaksi database dengan ${photoPathUpdates.length} pembaruan path...`);
         await prisma.$transaction(async (tx) => {
-            // Update semua path foto
+            // Update semua path foto di tabel Participant
             if (photoPathUpdates.length > 0) {
                 // Jalankan update path secara berurutan di dalam transaksi untuk keandalan
-                for(const update of photoPathUpdates) {
+                for (const update of photoPathUpdates) {
                     await tx.participant.updateMany({
                         where: { photoPath: update.fromPath },
                         data: { photoPath: update.toPath }
@@ -755,15 +793,16 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 }
             }
 
-            // Update tabel Registration utama
+            // Update tabel Registration utama dengan semua path permanen
             await tx.registration.update({
                 where: { id: registrationId },
                 data: {
                     status: 'CONFIRMED',
-                    excelPath: permanentPaths.excelPath,
-                    paymentProofPath: permanentPaths.paymentProofPath,
-                    photosPath: permanentPaths.photosPath,
-                    receiptPath: permanentPaths.receiptPath,
+                    excelPath: permanentPathsToUpdate.excelPath,
+                    paymentProofPath: permanentPathsToUpdate.paymentProofPath,
+                    photosPath: permanentPathsToUpdate.photosPath,
+                    receiptPath: permanentPathsToUpdate.receiptPath,
+                    // Kosongkan semua path sementara
                     excelTempPath: null,
                     paymentProofTempPath: null,
                     receiptTempPath: null,
@@ -792,6 +831,8 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 });
                 await tx.tentReservation.deleteMany({ where: { registrationId } });
             }
+        }, {
+            timeout: 45000 // Beri waktu 45 detik untuk transaksi ini, sangat aman
         });
         
         console.log(`[ACTION] Transaksi database dan finalisasi untuk ${registrationId} selesai.`);
