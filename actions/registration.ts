@@ -92,12 +92,6 @@ export async function getVerificationDataAction(registrationId: string): Promise
     }
 }
 
-type ImageReference = {
-    type: 'image';
-    imageId: string; // Ternyata ini string, bukan number
-    range: ExcelJS.ImageRange;
-};
-
 interface ParticipantRowData {
   rowNumber: number | null;
   fullName: string;
@@ -1201,6 +1195,28 @@ export async function deleteRegistrationAction(registrationId: string): Promise<
         console.error(`Error deleting registration ${registrationId}:`, error);
         return { success: false, message: 'Gagal menghapus pendaftaran.' };
     }
+}
+
+// Tipe data yang diperkaya
+export type RegistrationWithTents = Awaited<ReturnType<typeof getRegistrations>>[0];
+
+// Server action untuk mengambil data dengan filter
+export async function getRegistrations(filters: { category?: string; date?: string }) {
+    const whereClause: any = { status: { not: 'DRAFT' } };
+    if (filters.category) whereClause.schoolCategory = filters.category;
+    if (filters.date) {
+        const startDate = new Date(filters.date);
+        const endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 1);
+        whereClause.createdAt = { gte: startDate, lt: endDate };
+    }
+    return prisma.registration.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        include: {
+            tentBookings: { include: { tentType: true } },
+        },
+    });
 }
 
 export async function getRegistrationDetailsAction(registrationId: string): Promise<RegistrationDetail | null> {

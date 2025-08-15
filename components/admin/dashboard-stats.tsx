@@ -1,0 +1,41 @@
+// File: components/admin/dashboard-stats.tsx
+'use client';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { School, DollarSign } from "lucide-react";
+import { useState } from "react";
+
+type DashboardStatsProps = {
+    initialStats: {
+        totalRegistrations: number;
+        totalRevenue: number;
+    };
+};
+
+export function DashboardStats({ initialStats }: DashboardStatsProps) {
+    const [stats, setStats] = useState(initialStats);
+    
+   return (
+        <div className="grid gap-4 md:grid-cols-2">
+            <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Total Sekolah Terdaftar</CardTitle>
+                    <School className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                    <div className="text-2xl font-bold">{stats.totalRegistrations}</div>
+                    <p className="text-xs text-muted-foreground">Termasuk yang menunggu konfirmasi</p>
+                </CardContent>
+            </Card>
+            <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Total Pemasukan (Terkonfirmasi)</CardTitle>
+                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                    <div className="text-2xl font-bold">Rp {stats.totalRevenue.toLocaleString('id-ID')}</div>
+                    <p className="text-xs text-muted-foreground">Hanya dari pendaftaran yang lunas</p>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}

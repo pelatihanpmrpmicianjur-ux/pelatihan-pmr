@@ -1,130 +1,135 @@
 // File: app/admin/dashboard/page.tsx
-// Perhatikan: Tidak ada 'use client'; di sini, ini adalah Server Component
+'use server'; // Ini adalah file Server Component yang juga bisa mengekspor Server Actions
 
-import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { prisma } from "@/lib/db";
-import { RegistrationStatus } from "@prisma/client";
+import { Suspense } from 'react';
+import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-// Definisikan tipe data yang kita ambil, meskipun tidak digunakan
-// oleh state, ini baik untuk kejelasan.
-type RegistrationListItem = {
-    id: string;
-    createdAt: Date; // Prisma mengembalikan objek Date
-    status: RegistrationStatus;
-    schoolName: string;
-    coachName: string | null;
-    grandTotal: number;
-    customOrderId: string | null;
+import { DashboardStats } from '@/components/admin/dashboard-stats';
+import { DashboardTable } from '@/components/admin/dashboard-table';
+import { Registration, TentBooking, TentType } from '@prisma/client'; // Impor tipe-tipe yang dibutuhkan
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+
+// ====================================================================
+// === BAGIAN SERVER ACTIONS ===
+// (Kode ini sudah benar)
+// ====================================================================
+
+// Tipe data yang diperkaya untuk tabel kita
+// Menggabungkan tipe dasar dengan relasinya
+export type RegistrationWithTents = Registration & {
+    tentBookings: (TentBooking & {
+        tentType: TentType;
+    })[];
+};
+
+// Server action baru untuk mengambil data dengan filter
+export async function getRegistrations(filters: { category?: 'Wira' | 'Madya'; date?: string }) {
+    // Tipe `any` digunakan di sini untuk fleksibilitas pembuatan query
+    // Ini adalah kasus penggunaan yang bisa diterima untuk `whereClause` dinamis
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const whereClause: any = {
+        status: { not: 'DRAFT' }
+    };
+
+    if (filters.category) {
+        whereClause.schoolCategory = filters.category;
+    }
+
+    if (filters.date) {
+        const startDate = new Date(filters.date);
+        const endDate = new Date(startDate);
+endDate.setUTCDate(startDate.getUTCDate() + 1); // Gunakan UTC untuk konsistensi
+        whereClause.createdAt = {
+            gte: startDate,
+            lt: endDate,
+        };
+    }
+
+    return prisma.registration.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        include: {
+            tentBookings: {
+                include: {
+                    tentType: true,
+                },
+            },
+        },
+    });
 }
 
-// Objek untuk memetakan status ke varian visual dari Badge
-const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = {
-    DRAFT: 'outline',
-    SUBMITTED: 'secondary',
-    CONFIRMED: 'default',
-    REJECTED: 'destructive',
-};
-
-const statusTextMap: { [key in RegistrationStatus]: string } = {
-    DRAFT: 'Draft / Belum Selesai',
-    SUBMITTED: 'Menunggu Konfirmasi',
-    CONFIRMED: 'Terkonfirmasi',
-    REJECTED: 'Ditolak',
-};
-
-
-// Komponen halaman sekarang adalah fungsi ASYNC
-export default async function DashboardPage() {
+// Server action untuk statistik
+export async function getDashboardStats() {
+    const [totalRegistrations, totalRevenueResult] = await Promise.all([
+        prisma.registration.count({
+            where: { status: { not: 'DRAFT' } }
+        }),
+        prisma.registration.aggregate({
+            _sum: { grandTotal: true },
+            where: { status: 'CONFIRMED' }
+        })
+    ]);
     
-    // ======================================================
-    // === PERBAIKAN KEAMANAN: PERIKSA SESI DI SINI ===
-    // ======================================================
-    const session = await getServerSession(authOptions);
+    return {
+        totalRegistrations,
+        totalRevenue: totalRevenueResult._sum.grandTotal || 0
+    };
+}
 
-    // Jika tidak ada sesi (pengguna belum login), alihkan ke halaman login.
-    // Gunakan URL yang kita tentukan di `pages` di authOptions.
+
+// ====================================================================
+// === BAGIAN KOMPONEN HALAMAN (JSX) ===
+// ====================================================================
+
+export default async function DashboardPage() {
+    const session = await getServerSession(authOptions);
     if (!session) {
         redirect('/login'); 
     }
-    // ======================================================
 
-
-    // Kode ini hanya akan berjalan jika pengguna sudah login.
-    const registrations = await prisma.registration.findMany({
-        orderBy: {
-            createdAt: 'desc',
-        },
-        select: {
-            id: true,
-            createdAt: true,
-            status: true,
-            schoolName: true,
-            coachName: true,
-            grandTotal: true,
-            customOrderId: true,
-        }
-    });
+    // Ambil data awal di server saat halaman pertama kali dimuat
+    const initialRegistrations = await getRegistrations({});
+    const initialStats = await getDashboardStats();
 
     return (
         <div className="space-y-6">
-            <h2 className="text-3xl font-bold tracking-tight">Dashboard Pendaftaran Masuk</h2>
-            <div className="bg-white rounded-lg shadow-md border border-gray-200">
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-gray-50 text-xs text-gray-700 uppercase">
-                            <tr>
-                                <th scope="col" className="px-6 py-3">ID Pesanan</th>
-                                <th scope="col" className="px-6 py-3">Nama Sekolah</th>
-                                <th scope="col" className="px-6 py-3">Tanggal Daftar</th>
-                                <th scope="col" className="px-6 py-3 text-right">Total Biaya</th>
-                                <th scope="col" className="px-6 py-3 text-center">Status</th>
-                                <th scope="col" className="px-6 py-3 text-center">Aksi</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {registrations.length === 0 ? (
-                                <tr className="bg-white border-b">
-                                    <td colSpan={6} className="text-center p-8 text-gray-500">
-                                        Belum ada pendaftaran yang masuk.
-                                    </td>
-                                </tr>
-                            ) : (
-                                registrations.map(reg => (
-                                    <tr key={reg.id} className="bg-white border-b hover:bg-gray-50">
-                                        <td className="px-6 py-4 font-mono text-xs text-gray-600">
-                                            {reg.customOrderId || '-'}
-                                        </td>
-                                        <td scope="row" className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">
-                                            {reg.schoolName}
-                                        </td>
-                                        <td className="px-6 py-4 text-gray-600">
-                                            {new Date(reg.createdAt).toLocaleDateString('id-ID', {
-                                                day: 'numeric', month: 'long', year: 'numeric'
-                                            })}
-                                        </td>
-                                        <td className="px-6 py-4 font-medium text-gray-800 text-right">
-                                            Rp {reg.grandTotal.toLocaleString('id-ID')}
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            <Badge variant={statusVariantMap[reg.status]}>
-                                                {statusTextMap[reg.status]}
-                                            </Badge>
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            <Link href={`/admin/registrations/${reg.id}`} className="font-medium text-red-600 hover:underline">
-                                                Lihat Detail
-                                            </Link>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            <h2 className="text-3xl font-bold tracking-tight">Dashboard Pendaftaran</h2>
+            
+            {/* 
+              Suspense digunakan untuk streaming UI. Jika salah satu komponen data
+              lambat dimuat, yang lain bisa ditampilkan terlebih dahulu.
+            */}
+            <Suspense fallback={<StatsSkeleton />}>
+                {/* 
+                  Komponen Klien ini menerima data awal sebagai props.
+                  Ia tidak akan melakukan fetch data lagi saat pertama kali dimuat.
+                */}
+                <DashboardStats initialStats={initialStats} />
+            </Suspense>
+            
+            <Suspense fallback={<TableSkeleton />}>
+                {/* 
+                  Komponen Klien ini juga menerima data awal sebagai props.
+                  Semua logika filter dan aksi akan terjadi di dalamnya.
+                */}
+                <DashboardTable initialRegistrations={initialRegistrations} />
+            </Suspense>
+
+            {/* TODO: Tabel Login History bisa ditambahkan di sini */}
         </div>
     );
 }
+
+// Komponen skeleton bisa ditempatkan di sini atau di filenya sendiri
+const StatsSkeleton = () => (
+    <div className="grid gap-4 md:grid-cols-2">
+        <Card><CardHeader><CardTitle>Loading...</CardTitle></CardHeader></Card>
+        <Card><CardHeader><CardTitle>Loading...</CardTitle></CardHeader></Card>
+    </div>
+);
+
+const TableSkeleton = () => (
+    <Card><CardHeader><CardTitle>Loading data tabel...</CardTitle></CardHeader></Card>
+);
