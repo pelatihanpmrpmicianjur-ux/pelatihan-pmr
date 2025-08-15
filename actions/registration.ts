@@ -698,7 +698,7 @@ export async function confirmRegistrationAction(registrationId: string): Promise
     const session = await getServerSession(authOptions);
     const adminId = (session?.user as any)?.id;
     if (!adminId) {
-        return { success: false, message: 'Akses ditolak. Anda harus login sebagai admin.' };
+        return { success: false, message: 'Akses ditolak.' };
     }
 
     try {
@@ -707,90 +707,84 @@ export async function confirmRegistrationAction(registrationId: string): Promise
         });
         
         if (!registration) {
-            return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid untuk dikonfirmasi.' };
+            return { success: false, message: 'Pendaftaran tidak ditemukan atau statusnya tidak valid.' };
         }
         
-        console.log(`[ACTION] Memulai finalisasi (sinkron, paralel) untuk: ${registrationId}`);
+        console.log(`[ACTION] Memulai finalisasi untuk: ${registrationId}`);
         const schoolSlug = slugify(registration.schoolNameNormalized);
+        
+        // --- Tahap 1: Siapkan dan jalankan SEMUA operasi file secara paralel ---
+        const fileOperations: Promise<any>[] = [];
+        
+        // Operasi untuk Excel, Bukti Bayar, dan Kwitansi
+        const fileTypes: ('excelTempPath' | 'paymentProofTempPath' | 'receiptTempPath')[] = [
+            'excelTempPath', 'paymentProofTempPath', 'receiptTempPath'
+        ];
+        const folderNames = {
+            excelTempPath: 'excel',
+            paymentProofTempPath: 'payment_proofs',
+            receiptTempPath: 'receipts'
+        };
+
+        fileTypes.forEach(fileType => {
+            const tempPath = registration[fileType];
+            if (tempPath) {
+                const fileName = path.basename(tempPath);
+                const toPath = `permanen/${schoolSlug}/${folderNames[fileType]}/${fileName}`;
+                fileOperations.push(
+                    supabaseAdmin.storage.from('registrations').move(tempPath, toPath)
+                        .then(result => ({ type: fileType, path: result.error ? null : toPath, error: result.error }))
+                );
+            }
+        });
+
+        // Operasi untuk Foto-foto
+        const tempPhotoDir = `temp/${schoolSlug}/photos/`;
+        const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
+        const permanentPhotoDir = `permanen/${schoolSlug}/photos/`;
+
+        if (photoFiles && photoFiles.length > 0) {
+            for (const file of photoFiles) {
+                const fromPath = `${tempPhotoDir}${file.name}`;
+                const toPath = `${permanentPhotoDir}${file.name}`;
+                fileOperations.push(
+                    supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
+                        .then(result => ({ type: 'photo', fromPath, toPath: result.error ? null : toPath, error: result.error }))
+                );
+            }
+        }
+        
+        console.log(`[ACTION] Menjalankan ${fileOperations.length} operasi file secara paralel...`);
+        const results = await Promise.all(fileOperations);
+        console.log(`[ACTION] Operasi file selesai.`);
+        
+        // --- Tahap 2: Proses hasil dan siapkan data untuk DB ---
         const permanentPaths = {
             excelPath: null as string | null,
             paymentProofPath: null as string | null,
             photosPath: null as string | null,
             receiptPath: null as string | null,
         };
-
-        // Array untuk menyimpan promise operasi file
-        const fileMovePromises: Promise<any>[] = [];
-        // Array untuk menyimpan data yang diperlukan untuk update DB nanti
         const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
-        
-        // --- Tahap 1: Siapkan SEMUA operasi pemindahan file ---
 
-        if (registration.excelTempPath) {
-            const fileName = path.basename(registration.excelTempPath);
-            const toPath = `permanen/${schoolSlug}/excel/${fileName}`;
-            fileMovePromises.push(
-                supabaseAdmin.storage.from('registrations').move(registration.excelTempPath, toPath)
-                    .then(({ error }) => {
-                        if (error) console.error(`Gagal memindahkan Excel: ${error.message}`);
-                        else permanentPaths.excelPath = toPath;
-                    })
-            );
-        }
-
-        if (registration.paymentProofTempPath) {
-            const fileName = path.basename(registration.paymentProofTempPath);
-            const toPath = `permanen/${schoolSlug}/payment_proofs/${fileName}`;
-            fileMovePromises.push(
-                supabaseAdmin.storage.from('registrations').move(registration.paymentProofTempPath, toPath)
-                    .then(({ error }) => {
-                        if (error) console.error(`Gagal memindahkan Bukti Bayar: ${error.message}`);
-                        else permanentPaths.paymentProofPath = toPath;
-                    })
-            );
-        }
-        
-        if (registration.receiptTempPath) {
-            const fileName = path.basename(registration.receiptTempPath);
-            const toPath = `permanen/${schoolSlug}/receipts/${fileName}`;
-            fileMovePromises.push(
-                supabaseAdmin.storage.from('registrations').move(registration.receiptTempPath, toPath)
-                    .then(({ error }) => {
-                        if (error) console.error(`Gagal memindahkan Kwitansi: ${error.message}`);
-                        else permanentPaths.receiptPath = toPath;
-                    })
-            );
-        }
-
-        const tempPhotoDir = `temp/${schoolSlug}/photos/`;
-        const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
+        results.forEach(res => {
+            if (res && !res.error) {
+                switch(res.type) {
+                    case 'excelTempPath': permanentPaths.excelPath = res.path; break;
+                    case 'paymentProofTempPath': permanentPaths.paymentProofPath = res.path; break;
+                    case 'receiptTempPath': permanentPaths.receiptPath = res.path; break;
+                    case 'photo': photoPathUpdates.push({ fromPath: res.fromPath, toPath: res.toPath }); break;
+                }
+            } else if (res && res.error) {
+                console.error(`Gagal memindahkan file:`, res.error.message);
+            }
+        });
 
         if (photoFiles && photoFiles.length > 0) {
-            permanentPaths.photosPath = `permanen/${schoolSlug}/photos/`;
-            for (const file of photoFiles) {
-                const fromPath = `${tempPhotoDir}${file.name}`;
-                const toPath = `${permanentPaths.photosPath}${file.name}`;
-                
-                fileMovePromises.push(
-                    supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
-                        .then(({ error }) => {
-                            if (!error) {
-                                // JANGAN panggil prisma di sini. Cukup kumpulkan data untuk diupdate nanti.
-                                photoPathUpdates.push({ fromPath, toPath });
-                            } else {
-                                console.error(`Gagal memindahkan foto ${fromPath}: ${error.message}`);
-                            }
-                        })
-                );
-            }
+            permanentPaths.photosPath = permanentPhotoDir;
         }
-        
-        // --- Tahap 2: Jalankan SEMUA operasi pemindahan file secara paralel ---
-        console.log(`[ACTION] Menjalankan ${fileMovePromises.length} operasi pemindahan file secara paralel...`);
-        await Promise.all(fileMovePromises);
-        console.log(`[ACTION] Semua file berhasil dipindahkan.`);
 
-        // --- Tahap 3: Lakukan SEMUA operasi database dalam satu transaksi cepat ---
+        // --- Tahap 3: Lakukan transaksi database yang bersih ---
         console.log(`[ACTION] Memulai transaksi database...`);
         await prisma.$transaction(async (tx) => {
             // Update semua path foto jika ada
