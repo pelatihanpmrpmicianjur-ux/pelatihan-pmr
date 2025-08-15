@@ -22,11 +22,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar as CalendarIcon, MoreHorizontal, Download, Eye, Check, X, Trash2, Loader2, FileSpreadsheet } from "lucide-react";
+import { Calendar as CalendarIcon, MoreHorizontal, Download, Eye, Check, X, Trash2, Loader2, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 import Image from "next/image";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
+import { cn } from "@/lib/utils";
 
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
@@ -56,6 +57,18 @@ useEffect(() => {
             }).then(setRegistrations);
         });
     }, [filters]);
+
+    const handleRefresh = () => {
+        startTransition(() => {
+            toast.info("Memuat ulang data pendaftar...");
+            const categoryFilter = filters.category === 'all' ? undefined : filters.category;
+            const dateFilter = filters.date ? filters.date.toISOString().split('T')[0] : undefined;
+            getRegistrations({ category: categoryFilter, date: dateFilter }).then((data) => {
+                setRegistrations(data);
+                toast.success("Data berhasil diperbarui.");
+            });
+        });
+    };
 
     const handleExportToExcel = () => {
         const dataToExport = registrations.map(reg => ({
@@ -110,10 +123,14 @@ useEffect(() => {
                     
                     <Button variant="secondary" onClick={() => setFilters({ category: 'all', date: undefined })}>Reset Filter</Button>
 
-                    <div className="flex-grow" />
-                    <Button onClick={handleExportToExcel} variant="outline">
-                        <FileSpreadsheet className="mr-2 h-4 w-4" /> Ekspor ke Excel
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button onClick={handleExportToExcel} variant="outline" size="sm" disabled={isPending || registrations.length === 0}>
+                            <FileSpreadsheet className="mr-2 h-4 w-4" /> Export
+                        </Button>
+                        <Button onClick={handleRefresh} variant="outline" size="icon" disabled={isPending}>
+                            <RefreshCw className={cn("h-4 w-4", isPending && "animate-spin")} />
+                        </Button>
+                    </div>
                 </div>
             </CardHeader>
             <CardContent>
