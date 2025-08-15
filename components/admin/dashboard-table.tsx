@@ -26,22 +26,32 @@ import { Calendar as CalendarIcon, MoreHorizontal, Download, Eye, Check, X, Tras
 import { format } from "date-fns";
 import Image from "next/image";
 import * as XLSX from 'xlsx';
+import { RegistrationStatus } from "@prisma/client";
 
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
 const statusTextMap: { [key in RegistrationStatus]: string } = { DRAFT: 'Draft', SUBMITTED: 'Menunggu Konfirmasi', CONFIRMED: 'Terkonfirmasi', REJECTED: 'Ditolak' };
-type RegistrationStatus = import('@prisma/client').RegistrationStatus;
+
+type Filters = {
+    category: 'all' | 'Wira' | 'Madya';
+    date?: Date;
+}
 
 export function DashboardTable({ initialRegistrations }: { initialRegistrations: RegistrationWithTents[] }) {
     const router = useRouter();
     const [registrations, setRegistrations] = useState(initialRegistrations);
-    const [filters, setFilters] = useState<{ category: string; date?: Date }>({ category: 'all' });
+     const [filters, setFilters] = useState<Filters>({ category: 'all' });
     const [isPending, startTransition] = useTransition();
 
-    useEffect(() => {
+useEffect(() => {
         startTransition(() => {
+            // ======================================================
+            // === PERBAIKAN UTAMA DI SINI ===
+            // ======================================================
+            const categoryFilter = filters.category === 'all' ? undefined : filters.category;
+
             getRegistrations({ 
-                category: filters.category === 'all' ? undefined : filters.category as any,
+                category: categoryFilter, // <-- Tidak perlu `as any` lagi
                 date: filters.date ? filters.date.toISOString().split('T')[0] : undefined
             }).then(setRegistrations);
         });
@@ -70,7 +80,12 @@ export function DashboardTable({ initialRegistrations }: { initialRegistrations:
                 <CardTitle>Data Pendaftar</CardTitle>
                 <CardDescription>Filter, kelola, dan ekspor semua data pendaftaran yang masuk.</CardDescription>
                 <div className="flex flex-wrap items-center gap-4 pt-4">
-                    <Select value={filters.category} onValueChange={(value) => setFilters(prev => ({ ...prev, category: value }))}>
+                   <Select 
+                        value={filters.category} 
+                        onValueChange={(value: 'all' | 'Wira' | 'Madya') => 
+                            setFilters(prev => ({ ...prev, category: value }))
+                        }
+                    >
                         <SelectTrigger className="w-[180px]">
                             <SelectValue placeholder="Filter Kategori" />
                         </SelectTrigger>
