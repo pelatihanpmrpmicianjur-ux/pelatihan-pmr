@@ -9,8 +9,7 @@ import { redirect } from 'next/navigation';
 import { DashboardStats } from '@/components/admin/dashboard-stats';
 import { DashboardTable } from '@/components/admin/dashboard-table';
 import { Registration, TentBooking, TentType } from '@prisma/client'; // Impor tipe-tipe yang dibutuhkan
-import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-
+import { LoginHistory } from '@/components/admin/login-history';
 // ====================================================================
 // === BAGIAN SERVER ACTIONS ===
 // (Kode ini sudah benar)
@@ -93,43 +92,38 @@ export default async function DashboardPage() {
     const initialRegistrations = await getRegistrations({});
     const initialStats = await getDashboardStats();
 
-    return (
+   return (
         <div className="space-y-6">
             <h2 className="text-3xl font-bold tracking-tight">Dashboard Pendaftaran</h2>
             
-            {/* 
-              Suspense digunakan untuk streaming UI. Jika salah satu komponen data
-              lambat dimuat, yang lain bisa ditampilkan terlebih dahulu.
-            */}
-            <Suspense fallback={<StatsSkeleton />}>
-                {/* 
-                  Komponen Klien ini menerima data awal sebagai props.
-                  Ia tidak akan melakukan fetch data lagi saat pertama kali dimuat.
-                */}
+            <Suspense fallback={<div>Loading stats...</div>}>
                 <DashboardStats initialStats={initialStats} />
             </Suspense>
             
-            <Suspense fallback={<TableSkeleton />}>
-                {/* 
-                  Komponen Klien ini juga menerima data awal sebagai props.
-                  Semua logika filter dan aksi akan terjadi di dalamnya.
-                */}
-                <DashboardTable initialRegistrations={initialRegistrations} />
-            </Suspense>
-
-            {/* TODO: Tabel Login History bisa ditambahkan di sini */}
+            <div className="grid gap-6 md:grid-cols-3">
+                <div className="md:col-span-2">
+                    <Suspense fallback={<div>Loading table...</div>}>
+                        <DashboardTable initialRegistrations={initialRegistrations} />
+                    </Suspense>
+                </div>
+                <div className="md:col-span-1">
+                     <Suspense fallback={<div>Loading history...</div>}>
+                        <LoginHistory />
+                    </Suspense>
+                </div>
+            </div>
         </div>
     );
 }
 
-// Komponen skeleton bisa ditempatkan di sini atau di filenya sendiri
-const StatsSkeleton = () => (
-    <div className="grid gap-4 md:grid-cols-2">
-        <Card><CardHeader><CardTitle>Loading...</CardTitle></CardHeader></Card>
-        <Card><CardHeader><CardTitle>Loading...</CardTitle></CardHeader></Card>
-    </div>
-);
-
-const TableSkeleton = () => (
-    <Card><CardHeader><CardTitle>Loading data tabel...</CardTitle></CardHeader></Card>
-);
+export async function getLoginHistory() {
+    return prisma.adminLoginHistory.findMany({
+        take: 10, // Ambil 10 entri terakhir
+        orderBy: { timestamp: 'desc' },
+        include: {
+            adminUser: {
+                select: { username: true } // Ambil username admin
+            }
+        }
+    });
+}

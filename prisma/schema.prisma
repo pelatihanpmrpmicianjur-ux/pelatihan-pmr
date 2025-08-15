@@ -153,4 +153,19 @@ model AdminUser {
   username  String   @unique
   password  String   // Akan disimpan dalam bentuk hash
   createdAt DateTime @default(now())
+
+  loginHistory AdminLoginHistory[]
+}
+
+model AdminLoginHistory {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  
+  adminUserId String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  
+  // Informasi tambahan yang bisa kita coba tangkap
+  ipAddress   String? // Alamat IP
+  userAgent   String? // Informasi browser & OS
+  status      String   // "SUCCESS" atau "FAILED"
 }

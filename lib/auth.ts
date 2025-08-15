@@ -3,10 +3,9 @@ import { type NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { prisma } from '@/lib/db';
 import bcrypt from 'bcryptjs';
+import { headers } from 'next/headers';
 
-// Definisikan authOptions di sini
 export const authOptions: NextAuthOptions = {
-  
   providers: [
     CredentialsProvider({
       name: 'Credentials',
@@ -15,57 +14,69 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
-        console.log("\n--- [AUTHORIZE] FUNGSI DIPANGGIL ---");
         
-        if (!credentials) {
-            console.log("[AUTHORIZE] Gagal: Kredensial tidak ada.");
-            return null;
+        // ===============================================
+        // === PERBAIKAN: Gunakan 'headers()' dengan benar ===
+        // ===============================================
+        let ip = 'N/A';
+        let userAgent = 'N/A';
+
+        try {
+            const reqHeaders = await headers();
+            ip = reqHeaders.get('x-forwarded-for') || reqHeaders.get('x-vercel-forwarded-for') || 'N/A';
+            userAgent = reqHeaders.get('user-agent') || 'N/A';
+        } catch (error) {
+            // headers() akan melempar error jika dipanggil di luar konteks request
+            // (misalnya, saat build). Kita tangkap ini untuk keamanan.
+            console.warn("Tidak dapat mengambil headers, mungkin di luar konteks request.");
         }
+        // ===============================================
+        
 
-        // --- LOG KRUSIAL DI SINI ---
-        // Kita akan log kredensial yang diterima, dibungkus tanda kutip untuk melihat spasi
-        console.log(`[AUTHORIZE] Username diterima: "${credentials.username}"`);
-        console.log(`[AUTHORIZE] Password diterima: "${credentials.password}"`);
-        // -----------------------------
-
-        // --- PERBAIKAN: Lakukan .trim() untuk membersihkan spasi ---
+        if (!credentials?.username || !credentials?.password) {
+          return null;
+        }
+        
         const username = credentials.username.trim();
         const password = credentials.password;
-        // --------------------------------------------------------
 
         if (!username || !password) {
-          console.log("[AUTHORIZE] Gagal: Username atau password kosong setelah di-trim.");
           return null;
         }
 
         try {
-          console.log(`[AUTHORIZE] Mencari user: "${username}"`);
           const user = await prisma.adminUser.findUnique({
-            where: { username: username } // Gunakan username yang sudah di-trim
+            where: { username: username }
           });
 
           if (!user) {
-            console.log(`[AUTHORIZE] Gagal: User '${username}' tidak ditemukan.`);
+            console.warn(`Upaya login GAGAL: User tidak ditemukan - '${username}' dari IP: ${ip}`);
             return null;
           }
-          console.log(`[AUTHORIZE] User ditemukan: ${user.username}`);
 
-          console.log("[AUTHORIZE] Membandingkan password...");
           const isPasswordValid = await bcrypt.compare(
-            password, // Gunakan password asli tanpa trim
+            password,
             user.password
           );
 
           if (!isPasswordValid) {
-            console.log("[AUTHORIZE] Gagal: Password tidak cocok.");
+            await prisma.adminLoginHistory.create({
+                data: { adminUserId: user.id, ipAddress: ip, userAgent: userAgent, status: 'FAILED' }
+            });
+            console.warn(`Upaya login GAGAL: Password salah - '${username}' dari IP: ${ip}`);
             return null;
           }
-          console.log("[AUTHORIZE] Sukses: Password cocok.");
+          
+          await prisma.adminLoginHistory.create({
+            data: { adminUserId: user.id, ipAddress: ip, userAgent: userAgent, status: 'SUCCESS' }
+          });
+          
+          console.log(`Login BERHASIL: '${username}' dari IP: ${ip}`);
           
           return { id: user.id, username: user.username };
 
         } catch (error) {
-          console.error("[AUTHORIZE] Error kritis:", error);
+          console.error("[AUTHORIZE] Terjadi error kritis saat otentikasi:", error);
           return null;
         }
       }
@@ -78,6 +89,7 @@ export const authOptions: NextAuthOptions = {
     signIn: '/login',
   },
   callbacks: {
+    // Tipe 'user' dan 'token' diperluas melalui `types/next-auth.d.ts`
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
@@ -86,9 +98,10 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      if (session.user) {
-       session.user.id = token.id;         // <-- Hapus 'as any'
-        session.user.username = token.username; // <-- Hapus 'as any'
+      // Pastikan session.user ada sebelum menugasinya
+      if (session.user && token) {
+        session.user.id = token.id;
+        session.user.username = token.username;
       }
       return session;
     },
