@@ -692,10 +692,10 @@ export async function getReceiptUrlAction(registrationId: string): Promise<Recei
 }
 
 
+// File: actions/registration.ts
+
 export async function confirmRegistrationAction(registrationId: string): Promise<{ success: boolean; message: string; }> {
     const session = await getServerSession(authOptions);
-    // Di next-auth v5, session.user.id mungkin tidak ada, tergantung callback.
-    // Gunakan pengecekan yang lebih aman.
     const adminId = (session?.user as any)?.id;
     if (!adminId) {
         return { success: false, message: 'Akses ditolak. Anda harus login sebagai admin.' };
@@ -719,59 +719,49 @@ export async function confirmRegistrationAction(registrationId: string): Promise
             receiptPath: null as string | null,
         };
 
-        const allPromises: Promise<any>[] = [];
+        // Array untuk menyimpan promise operasi file
+        const fileMovePromises: Promise<any>[] = [];
+        // Array untuk menyimpan data yang diperlukan untuk update DB nanti
+        const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
         
-        // --- Siapkan semua "janji" (Promise) untuk dieksekusi secara paralel ---
+        // --- Tahap 1: Siapkan SEMUA operasi pemindahan file ---
 
-        // Janji untuk memindahkan File Excel
         if (registration.excelTempPath) {
             const fileName = path.basename(registration.excelTempPath);
             const toPath = `permanen/${schoolSlug}/excel/${fileName}`;
-            allPromises.push(
+            fileMovePromises.push(
                 supabaseAdmin.storage.from('registrations').move(registration.excelTempPath, toPath)
                     .then(({ error }) => {
-                        if (error) {
-                            console.error(`Gagal memindahkan Excel: ${error.message}`);
-                        } else {
-                            permanentPaths.excelPath = toPath;
-                        }
+                        if (error) console.error(`Gagal memindahkan Excel: ${error.message}`);
+                        else permanentPaths.excelPath = toPath;
                     })
             );
         }
 
-        // Janji untuk memindahkan Bukti Bayar
         if (registration.paymentProofTempPath) {
             const fileName = path.basename(registration.paymentProofTempPath);
             const toPath = `permanen/${schoolSlug}/payment_proofs/${fileName}`;
-            allPromises.push(
+            fileMovePromises.push(
                 supabaseAdmin.storage.from('registrations').move(registration.paymentProofTempPath, toPath)
                     .then(({ error }) => {
-                        if (error) {
-                            console.error(`Gagal memindahkan Bukti Bayar: ${error.message}`);
-                        } else {
-                            permanentPaths.paymentProofPath = toPath;
-                        }
+                        if (error) console.error(`Gagal memindahkan Bukti Bayar: ${error.message}`);
+                        else permanentPaths.paymentProofPath = toPath;
                     })
             );
         }
         
-        // Janji untuk memindahkan Kwitansi
         if (registration.receiptTempPath) {
             const fileName = path.basename(registration.receiptTempPath);
             const toPath = `permanen/${schoolSlug}/receipts/${fileName}`;
-            allPromises.push(
+            fileMovePromises.push(
                 supabaseAdmin.storage.from('registrations').move(registration.receiptTempPath, toPath)
                     .then(({ error }) => {
-                        if (error) {
-                            console.error(`Gagal memindahkan Kwitansi: ${error.message}`);
-                        } else {
-                            permanentPaths.receiptPath = toPath;
-                        }
+                        if (error) console.error(`Gagal memindahkan Kwitansi: ${error.message}`);
+                        else permanentPaths.receiptPath = toPath;
                     })
             );
         }
 
-        // Janji untuk memindahkan Foto & Update Path Peserta
         const tempPhotoDir = `temp/${schoolSlug}/photos/`;
         const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
 
@@ -781,17 +771,12 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 const fromPath = `${tempPhotoDir}${file.name}`;
                 const toPath = `${permanentPaths.photosPath}${file.name}`;
                 
-                // Tambahkan janji untuk memindahkan file fisik, yang kemudian
-                // akan memicu janji untuk update path di database.
-                allPromises.push(
+                fileMovePromises.push(
                     supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
                         .then(({ error }) => {
                             if (!error) {
-                                // Jika pemindahan berhasil, kembalikan janji untuk update DB
-                                return prisma.participant.updateMany({
-                                    where: { photoPath: fromPath },
-                                    data: { photoPath: toPath }
-                                });
+                                // JANGAN panggil prisma di sini. Cukup kumpulkan data untuk diupdate nanti.
+                                photoPathUpdates.push({ fromPath, toPath });
                             } else {
                                 console.error(`Gagal memindahkan foto ${fromPath}: ${error.message}`);
                             }
@@ -800,13 +785,26 @@ export async function confirmRegistrationAction(registrationId: string): Promise
             }
         }
         
-        // Jalankan SEMUA operasi I/O secara bersamaan
-        console.log(`[ACTION] Menjalankan ${allPromises.length} operasi I/O secara paralel...`);
-        await Promise.all(allPromises);
-        console.log(`[ACTION] Semua operasi I/O selesai.`);
+        // --- Tahap 2: Jalankan SEMUA operasi pemindahan file secara paralel ---
+        console.log(`[ACTION] Menjalankan ${fileMovePromises.length} operasi pemindahan file secara paralel...`);
+        await Promise.all(fileMovePromises);
+        console.log(`[ACTION] Semua file berhasil dipindahkan.`);
 
-        // Lakukan Transaksi Database Final (ini sudah cepat)
+        // --- Tahap 3: Lakukan SEMUA operasi database dalam satu transaksi cepat ---
+        console.log(`[ACTION] Memulai transaksi database...`);
         await prisma.$transaction(async (tx) => {
+            // Update semua path foto jika ada
+            if (photoPathUpdates.length > 0) {
+                // Buat promise untuk setiap update path agar bisa berjalan paralel di dalam transaksi
+                const updatePathPromises = photoPathUpdates.map(update => 
+                    tx.participant.updateMany({
+                        where: { photoPath: update.fromPath },
+                        data: { photoPath: update.toPath }
+                    })
+                );
+                await Promise.all(updatePathPromises);
+            }
+
             // Update tabel Registration utama dengan path permanen dan status
             await tx.registration.update({
                 where: { id: registrationId },
@@ -822,7 +820,7 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                 }
             });
             
-            // Buat audit log untuk tindakan konfirmasi
+            // Buat audit log
             await tx.auditLog.create({
                 data: { 
                     action: 'REGISTRATION_CONFIRMED', 
@@ -846,9 +844,8 @@ export async function confirmRegistrationAction(registrationId: string): Promise
             }
         });
         
-        console.log(`[ACTION] Finalisasi (sinkron, paralel) untuk ${registrationId} selesai.`);
+        console.log(`[ACTION] Transaksi database dan finalisasi untuk ${registrationId} selesai.`);
         
-        // Revalidate path agar data di-refresh di sisi klien
         revalidatePath('/admin/dashboard');
         revalidatePath(`/admin/registrations/${registrationId}`);
         revalidatePath('/admin/participants');
