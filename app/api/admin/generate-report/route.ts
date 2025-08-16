@@ -11,11 +11,10 @@ type ReportRegistrationItem = DailyReportProps['registrations'][0];
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
-    const adminName = (session?.user as any)?.username || 'Admin';
-
     if (!session?.user?.id) {
-        return NextResponse.json({ message: 'Akses ditolak. Anda harus login.' }, { status: 401 });
+        return NextResponse.json({ message: 'Akses ditolak.' }, { status: 401 });
     }
+    const adminName = session.user.username || 'Admin';
 
     try {
         const { reportDate } = await request.json();
