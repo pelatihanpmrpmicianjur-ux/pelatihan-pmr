@@ -27,7 +27,6 @@ import { format } from "date-fns";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
-import { generateDailyReportAction } from '@/actions/pdf';
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
 const statusTextMap: { [key in RegistrationStatus]: string } = { DRAFT: 'Draft', SUBMITTED: 'Menunggu Konfirmasi', CONFIRMED: 'Terkonfirmasi', REJECTED: 'Ditolak' };
@@ -108,7 +107,7 @@ useEffect(() => {
         XLSX.writeFile(workbook, "Data-Pendaftaran-PMR.xlsx");
     };
 
-    const handleGenerateReport = async () => {
+     const handleGenerateReport = async () => {
         if (!reportDate) {
             return toast.error("Silakan pilih tanggal laporan.");
         }
@@ -117,8 +116,17 @@ useEffect(() => {
 
         try {
             const dateString = reportDate.toISOString().split('T')[0];
-            const result = await generateDailyReportAction(dateString);
             
+            // --- PANGGIL API ROUTE MENGGUNAKAN FETCH ---
+            const response = await fetch('/api/admin/generate-report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reportDate: dateString }),
+            });
+
+            const result = await response.json();
+            // ------------------------------------------
+
             if (!result.success || !result.pdfBase64) {
                 throw new Error(result.message);
             }
