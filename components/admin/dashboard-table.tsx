@@ -27,7 +27,7 @@ import { format } from "date-fns";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
-
+import { generateDailyReportAction } from '@/actions/registration';
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
 const statusTextMap: { [key in RegistrationStatus]: string } = { DRAFT: 'Draft', SUBMITTED: 'Menunggu Konfirmasi', CONFIRMED: 'Terkonfirmasi', REJECTED: 'Ditolak' };
@@ -37,9 +37,21 @@ type Filters = {
     date?: Date;
 }
 
-type DashboardTableProps = {
-    initialRegistrations: RegistrationWithTents[];
-    onActionSuccess: () => void; // <-- Terima callback ini
+function downloadPdf(base64: string, filename: string) {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 }
 
 export function DashboardTable({ initialRegistrations, onActionSuccess }: { 
@@ -50,6 +62,8 @@ export function DashboardTable({ initialRegistrations, onActionSuccess }: {
     useEffect(() => { setRegistrations(initialRegistrations) }, [initialRegistrations]);
      const [filters, setFilters] = useState<Filters>({ category: 'all' });
     const [isPending, startTransition] = useTransition();
+    const [reportDate, setReportDate] = useState<Date | undefined>(new Date());
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
 useEffect(() => {
         startTransition(() => {
@@ -92,6 +106,31 @@ useEffect(() => {
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Pendaftaran");
         XLSX.writeFile(workbook, "Data-Pendaftaran-PMR.xlsx");
+    };
+
+    const handleGenerateReport = async () => {
+        if (!reportDate) {
+            return toast.error("Silakan pilih tanggal laporan.");
+        }
+        setIsGeneratingReport(true);
+        const toastId = toast.loading("Membuat laporan harian...");
+
+        try {
+            const dateString = reportDate.toISOString().split('T')[0];
+            const result = await generateDailyReportAction(dateString);
+            
+            if (!result.success || !result.pdfBase64) {
+                throw new Error(result.message);
+            }
+            
+            downloadPdf(result.pdfBase64, `Laporan-Keuangan-${format(reportDate, 'yyyy-MM-dd')}.pdf`);
+            toast.success("Laporan berhasil diunduh.", { id: toastId });
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Gagal membuat laporan.";
+            toast.error(message, { id: toastId });
+        } finally {
+            setIsGeneratingReport(false);
+        }
     };
 
     return (
@@ -137,6 +176,10 @@ useEffect(() => {
                         <Button onClick={handleRefresh} variant="outline" size="icon" disabled={isPending}>
                             <RefreshCw className={cn("h-4 w-4", isPending && "animate-spin")} />
                         </Button>
+                         <Button onClick={handleGenerateReport} disabled={isGeneratingReport}>
+                        {isGeneratingReport ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                        Download Laporan
+                    </Button>
                     </div>
                 </div>
             </CardHeader>
