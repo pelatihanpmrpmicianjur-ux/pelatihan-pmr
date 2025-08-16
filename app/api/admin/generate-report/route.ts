@@ -3,10 +3,39 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
 import { format } from 'date-fns';
 
 const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')},-`;
+
+async function drawTextWithWrapping(page: PDFPage, text: string, options: {
+    font: PDFFont;
+    x: number;
+    y: number;
+    maxWidth: number;
+    size: number;
+    lineHeight: number;
+    color: any;
+}) {
+    const { font, x, y, maxWidth, size, lineHeight, color } = options;
+    const words = text.split(' ');
+    let line = '';
+    let currentY = y;
+    for (const word of words) {
+        const testLine = line + (line ? ' ' : '') + word;
+        const textWidth = font.widthOfTextAtSize(testLine, size);
+        if (textWidth > maxWidth && line !== '') {
+            page.drawText(line, { x, y: currentY, size, font, color });
+            line = word;
+            currentY -= lineHeight;
+        } else {
+            line = testLine;
+        }
+    }
+    page.drawText(line, { x, y: currentY, size, font, color });
+    return currentY - lineHeight; // Kembalikan posisi Y berikutnya
+}
+
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
@@ -80,27 +109,46 @@ export async function POST(request: Request) {
         currentY -= 25;
 
         // Header Tabel
-        const tableTopY = currentY;
-        page.drawText("NAMA SEKOLAH", { x: margin, y: tableTopY, font: boldFont, size: 9, color: rgb(0.4, 0.4, 0.4) });
-        page.drawText("PESERTA", { x: 300, y: tableTopY, font: boldFont, size: 9, color: rgb(0.4, 0.4, 0.4) });
-        page.drawText("PENDAMPING", { x: 380, y: tableTopY, font: boldFont, size: 9, color: rgb(0.4, 0.4, 0.4) });
-        page.drawText("TOTAL BIAYA", { x: width - margin - 100, y: tableTopY, font: boldFont, size: 9, color: rgb(0.4, 0.4, 0.4) });
-        currentY -= 20;
+         const tableTopY = currentY;
+        const col1X = margin;
+        const col2X = 220;
+        const col3X = 280;
+        const col4X = 350;
+        const col5X = width - margin - 100;
+
+        page.drawText("NAMA SEKOLAH", { x: col1X, y: tableTopY, font: boldFont, size: 9 });
+        page.drawText("PESERTA", { x: col2X, y: tableTopY, font: boldFont, size: 9 });
+        page.drawText("PENDAMPING", { x: col3X, y: tableTopY, font: boldFont, size: 9 });
+        page.drawText("TENDA DISEWA", { x: col4X, y: tableTopY, font: boldFont, size: 9 });
+        page.drawText("TOTAL BIAYA", { x: col5X, y: tableTopY, font: boldFont, size: 9 });
+        currentY -= 15;
+        page.drawLine({ start: { x: margin, y: currentY }, end: { x: width - margin, y: currentY }, thickness: 1 });
+        currentY -= 15;
 
         // Isi Tabel
-        confirmedRegistrations.forEach(reg => {
-            page.drawLine({ start: { x: margin, y: currentY + 8 }, end: { x: width - margin, y: currentY + 8 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+ for (const reg of confirmedRegistrations) {
+            const rowStartY = currentY;
             
-            page.drawText(reg.schoolNameNormalized, { x: margin, y: currentY, font: font, size: 10 });
-            page.drawText(reg._count.participants.toString(), { x: 315, y: currentY, font: font, size: 10 });
-            page.drawText(reg._count.companions.toString(), { x: 405, y: currentY, font: font, size: 10 });
+            // Kolom Nama Sekolah
+            await drawTextWithWrapping(page, reg.schoolNameNormalized, { font, x: col1X, y: rowStartY, maxWidth: 160, size: 10, lineHeight: 12, color: rgb(0,0,0) });
             
+            // Kolom Peserta & Pendamping
+            page.drawText(reg._count.participants.toString(), { x: col2X + 15, y: rowStartY, font, size: 10 });
+            page.drawText(reg._count.companions.toString(), { x: col3X + 30, y: rowStartY, font, size: 10 });
+
+            // Kolom Tenda
+            const tentInfo = reg.tentBookings.map(b => `${b.quantity}x ${b.tentType.name}`).join(', ') || 'Bawa Sendiri';
+            await drawTextWithWrapping(page, tentInfo, { font, x: col4X, y: rowStartY, maxWidth: 100, size: 8, lineHeight: 10, color: rgb(0.3, 0.3, 0.3) });
+
+            // Kolom Total Biaya
             const totalText = formatCurrency(reg.grandTotal);
             const textWidth = boldFont.widthOfTextAtSize(totalText, 10);
-            page.drawText(totalText, { x: width - margin - textWidth, y: currentY, font: boldFont, size: 10 });
-            
-            currentY -= 25;
-        });
+            page.drawText(totalText, { x: width - margin - textWidth, y: rowStartY, font: boldFont, size: 10 });
+
+            // Tentukan tinggi baris (berdasarkan kolom terpanjang, misal nama sekolah/tenda) dan update currentY
+            currentY -= 40; // Beri ruang tetap untuk setiap baris
+            page.drawLine({ start: { x: margin, y: currentY + 10 }, end: { x: width - margin, y: currentY + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+        }
 
         if (confirmedRegistrations.length === 0) {
             page.drawText("Tidak ada pendaftaran yang dikonfirmasi pada tanggal ini.", { x: margin, y: currentY, font: font, size: 10, color: rgb(0.5, 0.5, 0.5) });
