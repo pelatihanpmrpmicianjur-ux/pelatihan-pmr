@@ -6,12 +6,7 @@ import { School, DollarSign, RefreshCw } from "lucide-react";
 import { useEffect, useState, useTransition } from "react";
 import { Button } from "../ui/button";
 
-type DashboardStatsProps = {
-    initialStats: Stats;
-    refetchStats: () => Promise<void>; // <-- Terima fungsi refetch
-};
-
-export function DashboardStats({ initialStats, refetchStats }: DashboardStatsProps) {
+export function DashboardStats({ initialStats }: { initialStats: Stats }) {
     const [stats, setStats] = useState(initialStats);
     const [isPending, startTransition] = useTransition();
 

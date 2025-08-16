@@ -42,15 +42,12 @@ type DashboardTableProps = {
     onActionSuccess: () => void; // <-- Terima callback ini
 }
 
-export function DashboardTable({ 
-    initialRegistrations, 
-    onActionSuccess // <-- Terima prop dari halaman utama
-}: { 
+export function DashboardTable({ initialRegistrations, onActionSuccess }: { 
     initialRegistrations: RegistrationWithTents[]; 
     onActionSuccess: () => void; 
 }) {
-    const router = useRouter();
     const [registrations, setRegistrations] = useState(initialRegistrations);
+    useEffect(() => { setRegistrations(initialRegistrations) }, [initialRegistrations]);
      const [filters, setFilters] = useState<Filters>({ category: 'all' });
     const [isPending, startTransition] = useTransition();
 

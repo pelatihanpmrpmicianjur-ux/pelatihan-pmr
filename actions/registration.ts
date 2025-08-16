@@ -1241,6 +1241,8 @@ export async function getDashboardStats() {
     };
 }
 
+export type LoginHistoryItem = Awaited<ReturnType<typeof getLoginHistory>>[0];
+
 export async function getLoginHistory() {
     return prisma.adminLoginHistory.findMany({
         take: 10, // Ambil 10 entri terakhir

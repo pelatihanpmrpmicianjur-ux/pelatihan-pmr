@@ -9,8 +9,7 @@ import { formatDistanceToNow } from "date-fns";
 import { id } from "date-fns/locale";
 
 type LoginHistoryItem = Awaited<ReturnType<typeof getLoginHistory>>[0];
-
-export function LoginHistory() {
+export function LoginHistory({ initialHistory }: { initialHistory: LoginHistoryItem[] }) {
     const [history, setHistory] = useState<LoginHistoryItem[]>([]);
 
     useEffect(() => {
