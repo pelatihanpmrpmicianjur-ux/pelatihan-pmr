@@ -1,5 +1,5 @@
 // File: app/admin/dashboard/page.tsx
-'use server'; // Ini adalah file Server Component yang juga bisa mengekspor Server Actions
+'use client'; // Ini adalah file Server Component yang juga bisa mengekspor Server Actions
 
 import { Suspense, useState, useEffect } from 'react';
 import { getRegistrations, getDashboardStats, RegistrationWithTents, Stats } from '@/actions/registration';
