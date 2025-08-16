@@ -11,10 +11,11 @@ type ReportRegistrationItem = DailyReportProps['registrations'][0];
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
+    const adminName = session?.user?.username || 'Admin';
+
     if (!session?.user?.id) {
-        return NextResponse.json({ message: 'Akses ditolak.' }, { status: 401 });
+        return NextResponse.json({ message: 'Akses ditolak. Anda harus login.' }, { status: 401 });
     }
-    const adminName = session.user.username || 'Admin';
 
     try {
         const { reportDate } = await request.json();
@@ -29,36 +30,21 @@ export async function POST(request: Request) {
 
         console.log(`[GENERATE_REPORT] Membuat laporan untuk tanggal: ${startDate.toISOString()}`);
 
-        // 1. Ambil semua data pendaftaran yang dikonfirmasi pada hari tersebut
+        // 1. Ambil data pendaftaran yang dikonfirmasi
         const confirmedRegistrations = await prisma.registration.findMany({
             where: {
                 status: 'CONFIRMED',
-                updatedAt: {
-                    gte: startDate,
-                    lt: endDate,
-                }
+                updatedAt: { gte: startDate, lt: endDate }
             },
             include: {
-                _count: { 
-                    select: { 
-                        participants: true, 
-                        companions: true 
-                    } 
-                },
-                tentBookings: { 
-                    include: { 
-                        tentType: true 
-                    } 
-                },
+                _count: { select: { participants: true, companions: true } },
+                tentBookings: { include: { tentType: true } },
             }
         });
 
-        // 2. Olah data agar sesuai dengan tipe yang diharapkan oleh template
+        // 2. Olah data untuk dikirim ke template
         const reportData: ReportRegistrationItem[] = confirmedRegistrations.map(reg => {
-            const tentInfo = reg.tentBookings
-                .map(booking => `${booking.quantity}x ${booking.tentType.name} (Kap. ${booking.tentType.capacity})`)
-                .join(', ');
-
+            const tentInfo = reg.tentBookings.map(b => `${b.quantity}x ${b.tentType.name}`).join(', ');
             return {
                 schoolName: reg.schoolNameNormalized,
                 participantCount: reg._count.participants,
@@ -70,11 +56,15 @@ export async function POST(request: Request) {
         
         const totalRevenue = confirmedRegistrations.reduce((sum, reg) => sum + reg.grandTotal, 0);
 
-        // 3. Gunakan Impor Dinamis untuk pustaka server-only
+        // ======================================================
+        // === SOLUSI: GUNAKAN IMPOR DINAMIS DI SINI ===
+        // ======================================================
         const ReactDOMServer = (await import('react-dom/server')).default;
-        const puppeteer = (await import('puppeteer')).default;
+        const puppeteer = (await import('puppeteer-core')).default;
+        const chromium = (await import('@sparticuz/chromium')).default;
+        // ======================================================
 
-        // 4. Render template React menjadi string HTML statis
+        // 3. Render template React menjadi string HTML statis
         const htmlContent = ReactDOMServer.renderToString(
             React.createElement(DailyReportTemplate, {
                 reportDate: startDate.toLocaleDateString('id-ID', { dateStyle: 'full' }),
@@ -85,20 +75,23 @@ export async function POST(request: Request) {
             })
         );
         
-        // 5. Gunakan Puppeteer untuk mengubah HTML menjadi PDF
+        // 4. Gunakan Puppeteer untuk mengubah HTML menjadi PDF
         let pdfBytes: Buffer;
-        let browser = null;
+        let browser: import('puppeteer-core').Browser | null = null;
+
         try {
             console.log("[GENERATE_REPORT] Meluncurkan Puppeteer...");
-            browser = await puppeteer.launch({ 
-                headless: true, 
-                args: [
-                    '--no-sandbox', 
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--single-process'
-                ] 
+
+            const executablePath = process.env.NODE_ENV === 'production'
+                ? await chromium.executablePath()
+                : undefined;
+
+            browser = await puppeteer.launch({
+                args: process.env.NODE_ENV === 'production' ? chromium.args : ['--no-sandbox'],
+                executablePath,
+                headless: true,
             });
+            
             const page = await browser.newPage();
             await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
             
@@ -106,15 +99,10 @@ export async function POST(request: Request) {
             const pdfUint8Array = await page.pdf({
                 format: 'A4',
                 printBackground: true,
-                margin: {
-                    top: '0px',
-                    right: '0px',
-                    bottom: '0px',
-                    left: '0px',
-                }
+                margin: { top: '0px', right: '0px', bottom: '0px', left: '0px' }
             });
             pdfBytes = Buffer.from(pdfUint8Array);
-            console.log(`[GENERATE_REPORT] PDF berhasil dibuat dengan ukuran: ${(pdfBytes.length / 1024).toFixed(2)} KB`);
+            console.log(`[GENERATE_REPORT] PDF berhasil dibuat.`);
 
         } catch (puppeteerError) {
             console.error("Error spesifik saat menggunakan Puppeteer:", puppeteerError);
@@ -126,7 +114,7 @@ export async function POST(request: Request) {
             }
         }
         
-        // 6. Kembalikan PDF sebagai string Base64 dalam respons JSON
+        // 5. Kembalikan PDF sebagai string Base64
         return NextResponse.json({ 
             success: true, 
             message: "Laporan berhasil dibuat.", 
