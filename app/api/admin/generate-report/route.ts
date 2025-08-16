@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { PDFDocument, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFFont, PDFPage, rgb, StandardFonts, type RGB } from 'pdf-lib';
 import { format } from 'date-fns';
 
 const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')},-`;
@@ -15,12 +15,14 @@ async function drawTextWithWrapping(page: PDFPage, text: string, options: {
     maxWidth: number;
     size: number;
     lineHeight: number;
-    color: any;
+    color: RGB; // <-- Gunakan tipe RGB yang diimpor
 }) {
+    // --- PERBAIKAN: Destrukturisasi dengan benar ---
     const { font, x, y, maxWidth, size, lineHeight, color } = options;
     const words = text.split(' ');
     let line = '';
     let currentY = y;
+
     for (const word of words) {
         const testLine = line + (line ? ' ' : '') + word;
         const textWidth = font.widthOfTextAtSize(testLine, size);
@@ -33,9 +35,8 @@ async function drawTextWithWrapping(page: PDFPage, text: string, options: {
         }
     }
     page.drawText(line, { x, y: currentY, size, font, color });
-    return currentY - lineHeight; // Kembalikan posisi Y berikutnya
+    return currentY; // Kembalikan posisi Y saat ini untuk kalkulasi selanjutnya
 }
-
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
