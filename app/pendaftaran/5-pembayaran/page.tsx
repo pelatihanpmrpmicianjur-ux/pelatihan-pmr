@@ -170,13 +170,14 @@ export default function PembayaranPage() {
                                 </Button>
                             )}
                             {receiptUrl && !isCheckingReceipt && (
-                                <a href={receiptUrl} download={`kwitansi-${orderId.replace(/\//g, '_')}.pdf`}>
-                                    <Button className="w-full bg-blue-600 hover:bg-blue-700">
-                                        <Download className="mr-2 h-4 w-4" />
-                                        Unduh Kwitansi
-                                    </Button>
-                                </a>
-                            )}
+    // --- PERBAIKAN DI SINI ---
+    <a href={receiptUrl} download={`kwitansi-${orderId.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}>
+        <Button className="w-full bg-blue-600 hover:bg-blue-700">
+            <Download className="mr-2 h-4 w-4" />
+            Unduh Kwitansi
+        </Button>
+    </a>
+)}
                             {!receiptUrl && !isCheckingReceipt && (
                                 <p className="text-sm text-red-500">Gagal memuat kwitansi. Silakan hubungi panitia.</p>
                             )}

@@ -46,9 +46,10 @@ export async function requestUploadUrlAction(registrationId: string, fileName: s
     if (!registration) {
         return { success: false, message: 'Pendaftaran tidak ditemukan.' };
     }
+    const uniquePrefix = registrationId.substring(0, 8);
     const schoolSlug = slugify(registration.schoolNameNormalized);
-    const timestamp = Date.now();
-    const filePath = `temp/${schoolSlug}/excel/${timestamp}_${slugify(fileName)}`;
+    const newFileName = `${uniquePrefix}-${schoolSlug}${path.extname(fileName)}`;
+    const filePath = `temp/${schoolSlug}/excel/${newFileName}`;
 
     try {
         const { data, error } = await supabaseAdmin.storage.from('registrations').createSignedUploadUrl(filePath);
@@ -718,25 +719,41 @@ export async function confirmRegistrationAction(registrationId: string): Promise
         const photoPathUpdates: { fromPath: string; toPath: string }[] = [];
         
         // --- Tahap 1: Operasi Pemindahan File ---
+        const fileMovePromises: Promise<any>[] = [];
         
-        const mainFilesToMove: Promise<any>[] = [];
-        const mainFileTypes: ('excelTempPath' | 'paymentProofTempPath' | 'receiptTempPath')[] = ['excelTempPath', 'paymentProofTempPath', 'receiptTempPath'];
-        const folderNames: Record<typeof mainFileTypes[number], string> = {
-            excelTempPath: 'excel',
-            paymentProofTempPath: 'payment_proofs',
-            receiptTempPath: 'receipts'
-        };
+        // --- LOGIKA BARU UNTUK MEMBERI NAMA ULANG FILE EXCEL ---
+        if (registration.excelTempPath) {
+            // Ekstrak nomor urut dari customOrderId
+            const registrationNumber = registration.customOrderId 
+                ? registration.customOrderId.split('-')[0] 
+                : registration.id.substring(0, 4); // Fallback
+            
+            const originalExtension = path.extname(registration.excelTempPath);
+            const finalExcelName = `${registrationNumber}-${schoolSlug}${originalExtension}`;
+            const toPath = `permanen/${schoolSlug}/excel/${finalExcelName}`;
 
-        mainFileTypes.forEach(fileType => {
+            fileMovePromises.push(
+                supabaseAdmin.storage.from('registrations').move(registration.excelTempPath, toPath)
+                    .then(({ error }) => {
+                        if (error) console.error(`Gagal memindahkan Excel: ${error.message}`);
+                        else permanentPathsToUpdate.excelPath = toPath;
+                    })
+            );
+        }
+
+        // Pemindahan file lain (bukti bayar & kwitansi) tidak perlu diubah namanya
+        const otherFileTypes: ('paymentProofTempPath' | 'receiptTempPath')[] = ['paymentProofTempPath', 'receiptTempPath'];
+        const folderNames = { paymentProofTempPath: 'payment_proofs', receiptTempPath: 'receipts' };
+
+        otherFileTypes.forEach(fileType => {
             const tempPath = registration[fileType];
             if (tempPath) {
                 const fileName = path.basename(tempPath);
                 const toPath = `permanen/${schoolSlug}/${folderNames[fileType]}/${fileName}`;
-                mainFilesToMove.push(
+                fileMovePromises.push(
                     supabaseAdmin.storage.from('registrations').move(tempPath, toPath)
                         .then(({ error }) => {
                             if (!error) {
-                                // Tentukan properti yang akan diupdate berdasarkan tipe file
                                 const key = fileType.replace('TempPath', 'Path') as keyof typeof permanentPathsToUpdate;
                                 permanentPathsToUpdate[key] = toPath;
                             } else {
@@ -747,10 +764,10 @@ export async function confirmRegistrationAction(registrationId: string): Promise
             }
         });
         
-        // Jalankan pemindahan file utama secara paralel
-        await Promise.all(mainFilesToMove);
+        // Jalankan pemindahan file utama (Excel, bukti, kwitansi) secara paralel
+        await Promise.all(fileMovePromises);
 
-        // Pindahkan foto secara berkelompok (batching) untuk menghindari beban berlebih
+        // Pindahkan foto secara berkelompok (batching)
         const tempPhotoDir = `temp/${schoolSlug}/photos/`;
         const { data: photoFiles } = await supabaseAdmin.storage.from('registrations').list(tempPhotoDir);
         
@@ -760,22 +777,19 @@ export async function confirmRegistrationAction(registrationId: string): Promise
             
             for (let i = 0; i < photoFiles.length; i += BATCH_SIZE) {
                 const batch = photoFiles.slice(i, i + BATCH_SIZE);
-                console.log(`[ACTION] Memproses batch foto ${i / BATCH_SIZE + 1} dari ${Math.ceil(photoFiles.length / BATCH_SIZE)}...`);
+                console.log(`[ACTION] Memproses batch foto ${Math.floor(i / BATCH_SIZE) + 1} dari ${Math.ceil(photoFiles.length / BATCH_SIZE)}...`);
                 
-                const movePromises = batch.map(file => {
+                const movePhotoPromises = batch.map(file => {
                     const fromPath = `${tempPhotoDir}${file.name}`;
                     const toPath = `${permanentPathsToUpdate.photosPath}${file.name}`;
                     return supabaseAdmin.storage.from('registrations').move(fromPath, toPath)
                         .then(({ error }) => {
-                            if (!error) {
-                                photoPathUpdates.push({ fromPath, toPath });
-                            } else {
-                                console.error(`Gagal memindahkan foto ${fromPath}:`, error.message);
-                            }
+                            if (!error) photoPathUpdates.push({ fromPath, toPath });
+                            else console.error(`Gagal memindahkan foto ${fromPath}:`, error.message);
                         });
                 });
                 
-                await Promise.all(movePromises);
+                await Promise.all(movePhotoPromises);
             }
         }
         console.log(`[ACTION] Semua operasi file selesai.`);
@@ -783,18 +797,12 @@ export async function confirmRegistrationAction(registrationId: string): Promise
         // --- Tahap 2: Lakukan satu transaksi database besar ---
         console.log(`[ACTION] Memulai transaksi database dengan ${photoPathUpdates.length} pembaruan path...`);
         await prisma.$transaction(async (tx) => {
-            // Update semua path foto di tabel Participant
             if (photoPathUpdates.length > 0) {
-                // Jalankan update path secara berurutan di dalam transaksi untuk keandalan
                 for (const update of photoPathUpdates) {
-                    await tx.participant.updateMany({
-                        where: { photoPath: update.fromPath },
-                        data: { photoPath: update.toPath }
-                    });
+                    await tx.participant.updateMany({ where: { photoPath: update.fromPath }, data: { photoPath: update.toPath } });
                 }
             }
 
-            // Update tabel Registration utama dengan semua path permanen
             await tx.registration.update({
                 where: { id: registrationId },
                 data: {
@@ -803,37 +811,23 @@ export async function confirmRegistrationAction(registrationId: string): Promise
                     paymentProofPath: permanentPathsToUpdate.paymentProofPath,
                     photosPath: permanentPathsToUpdate.photosPath,
                     receiptPath: permanentPathsToUpdate.receiptPath,
-                    // Kosongkan semua path sementara
                     excelTempPath: null,
                     paymentProofTempPath: null,
                     receiptTempPath: null,
                 }
             });
             
-            // Buat audit log
             await tx.auditLog.create({
-                data: { 
-                    action: 'REGISTRATION_CONFIRMED', 
-                    actorId: adminId, 
-                    targetRegistrationId: registrationId, 
-                    details: { message: 'Pendaftaran dikonfirmasi via Server Action.' } 
-                }
+                data: { action: 'REGISTRATION_CONFIRMED', actorId: adminId, targetRegistrationId: registrationId, details: { message: 'Pendaftaran dikonfirmasi via Server Action.' } }
             });
             
-            // Ubah reservasi tenda menjadi booking permanen
             const reservations = await tx.tentReservation.findMany({ where: { registrationId } });
             if (reservations.length > 0) {
-                await tx.tentBooking.createMany({ 
-                    data: reservations.map(r => ({ 
-                        registrationId: r.registrationId, 
-                        tentTypeId: r.tentTypeId, 
-                        quantity: r.quantity 
-                    })) 
-                });
+                await tx.tentBooking.createMany({ data: reservations.map(r => ({ registrationId: r.registrationId, tentTypeId: r.tentTypeId, quantity: r.quantity })) });
                 await tx.tentReservation.deleteMany({ where: { registrationId } });
             }
         }, {
-            timeout: 45000 // Beri waktu 45 detik untuk transaksi ini, sangat aman
+            timeout: 45000
         });
         
         console.log(`[ACTION] Transaksi database dan finalisasi untuk ${registrationId} selesai.`);
@@ -1127,8 +1121,8 @@ export async function submitRegistrationAction(registrationId: string, formData:
         // --- Simpan PDF ---
          const pdfBytes = await pdfDoc.save();
         
-         const safeOrderId = orderId.replace(/\//g, '_');
-        const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeOrderId}.pdf`;
+        const safeFileNameBase = orderId.replace(/[^a-zA-Z0-9]/g, '_');
+        const receiptPath = `temp/${schoolSlug}/receipts/kwitansi_${safeFileNameBase}.pdf`;
 
         const { error: receiptUploadError } = await supabaseAdmin.storage.from('registrations').upload(receiptPath, pdfBytes, { contentType: 'application/pdf', upsert: true });
         if (receiptUploadError) throw new Error(`Gagal mengunggah kwitansi: ${receiptUploadError.message}`);
@@ -1228,6 +1222,7 @@ endDate.setUTCDate(startDate.getUTCDate() + 1); // Gunakan UTC untuk konsistensi
     });
 }
 
+export type Stats = Awaited<ReturnType<typeof getDashboardStats>>;
 // Server action untuk statistik
 export async function getDashboardStats() {
     const [totalRegistrations, totalRevenueResult] = await Promise.all([

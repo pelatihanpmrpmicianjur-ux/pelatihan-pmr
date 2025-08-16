@@ -24,7 +24,6 @@ import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar as CalendarIcon, MoreHorizontal, Download, Eye, Check, X, Trash2, Loader2, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
-import Image from "next/image";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
@@ -38,7 +37,18 @@ type Filters = {
     date?: Date;
 }
 
-export function DashboardTable({ initialRegistrations }: { initialRegistrations: RegistrationWithTents[] }) {
+type DashboardTableProps = {
+    initialRegistrations: RegistrationWithTents[];
+    onActionSuccess: () => void; // <-- Terima callback ini
+}
+
+export function DashboardTable({ 
+    initialRegistrations, 
+    onActionSuccess // <-- Terima prop dari halaman utama
+}: { 
+    initialRegistrations: RegistrationWithTents[]; 
+    onActionSuccess: () => void; 
+}) {
     const router = useRouter();
     const [registrations, setRegistrations] = useState(initialRegistrations);
      const [filters, setFilters] = useState<Filters>({ category: 'all' });
@@ -151,7 +161,12 @@ useEffect(() => {
                             {isPending ? (
                                 <TableRow><TableCell colSpan={7} className="h-24 text-center"><Loader2 className="animate-spin mx-auto" /></TableCell></TableRow>
                             ) : registrations.length > 0 ? (
-                                registrations.map(reg => <RegistrationRow key={reg.id} registration={reg} />)
+                                registrations.map(reg => <RegistrationRow 
+                                key={reg.id} 
+                                registration={reg} 
+                                // --- Teruskan prop ke setiap baris ---
+                                onActionSuccess={onActionSuccess} 
+                            />)
                             ) : (
                                 <TableRow><TableCell colSpan={7} className="h-24 text-center">Tidak ada data yang cocok dengan filter.</TableCell></TableRow>
                             )}
@@ -164,50 +179,57 @@ useEffect(() => {
 }
 
 // Komponen baris tabel terpisah untuk mengelola state-nya sendiri
-function RegistrationRow({ registration }: { registration: RegistrationWithTents }) {
-    const router = useRouter();
+function RegistrationRow({ 
+    registration, 
+    onActionSuccess // <-- Menerima prop baru
+}: { 
+    registration: RegistrationWithTents; 
+    onActionSuccess: () => void; // <-- Tipe prop baru
+}) {
+    const router = useRouter(); // router.refresh() sudah tidak diperlukan
     const [isActionPending, startActionTransition] = useTransition();
     const [fileUrls, setFileUrls] = useState<{ excelUrl: string | null, paymentProofUrl: string | null, receiptUrl: string | null }>({ excelUrl: null, paymentProofUrl: null, receiptUrl: null });
 
     const tentInfo = registration.tentBookings.map(b => `${b.quantity}x ${b.tentType.name}`).join(', ') || 'Bawa Sendiri';
 
-   const handleAction = async (action: 'confirm' | 'reject' | 'delete') => {
-    // Lakukan operasi sinkron (prompt, confirm) di luar transisi
-    if (action === 'reject') {
-        const reason = prompt("Masukkan alasan penolakan:");
-        if (!reason || reason.trim() === '') {
-            return toast.warning("Alasan penolakan dibatalkan atau kosong.");
+  const handleAction = async (action: 'confirm' | 'reject' | 'delete') => {
+        // Lakukan operasi UI sinkron (prompt, confirm) di luar transisi
+        let reason: string | null = null;
+        if (action === 'reject') {
+            reason = prompt("Masukkan alasan penolakan:");
+            if (!reason || reason.trim() === '') {
+                return toast.warning("Alasan penolakan dibatalkan atau kosong.");
+            }
+        } else if (action === 'delete') {
+            if (!confirm(`Anda yakin ingin menghapus pendaftaran untuk ${registration.schoolName}? Tindakan ini tidak bisa dibatalkan.`)) {
+                return;
+            }
         }
-        
-        // Mulai transisi HANYA untuk panggilan asinkron
-        startActionTransition(async () => {
-            const result = await rejectRegistrationAction(registration.id, reason);
-            if (result.success) toast.success(result.message);
-            else toast.error(result.message);
-            router.refresh();
-        });
 
-    } else if (action === 'delete') {
-        if (!confirm(`Anda yakin ingin menghapus pendaftaran untuk ${registration.schoolName}? Tindakan ini tidak bisa dibatalkan.`)) {
-            return;
-        }
-        
+        // Mulai transisi untuk pembaruan state yang disebabkan oleh aksi server
         startActionTransition(async () => {
-            const result = await deleteRegistrationAction(registration.id);
-            if (result.success) toast.success(result.message);
-            else toast.error(result.message);
-            router.refresh();
-        });
+            let result: { success: boolean; message: string; };
 
-    } else { // action === 'confirm'
-        startActionTransition(async () => {
-            const result = await confirmRegistrationAction(registration.id);
-            if (result.success) toast.success(result.message);
-            else toast.error(result.message);
-            router.refresh();
+            // Panggil Server Action yang sesuai
+            if (action === 'confirm') {
+                result = await confirmRegistrationAction(registration.id);
+            } else if (action === 'reject') {
+                // `reason` di sini dijamin ada karena sudah divalidasi di atas
+                result = await rejectRegistrationAction(registration.id, reason!);
+            } else { // action === 'delete'
+                result = await deleteRegistrationAction(registration.id);
+            }
+
+            // Tangani hasil dari Server Action
+            if (result.success) {
+                toast.success(result.message);
+                // Panggil callback untuk memicu re-fetch data di komponen induk
+                onActionSuccess(); 
+            } else {
+                toast.error(result.message);
+            }
         });
-    }
-};
+    };
     
     const handleFetchFileUrls = async () => {
         // Ambil URL hanya saat dropdown dibuka untuk efisiensi
@@ -267,7 +289,16 @@ function RegistrationRow({ registration }: { registration: RegistrationWithTents
                                 <DialogHeader>
                                     <DialogTitle>Bukti Pembayaran: {registration.schoolName}</DialogTitle>
                                     <DialogDescription>
-                                        <Image src={fileUrls.paymentProofUrl || ''} alt="Bukti Pembayaran" width={500} height={700} className="mt-4 rounded-md" />
+                                       {fileUrls.paymentProofUrl ? (
+                                            <img 
+                                                src={fileUrls.paymentProofUrl} 
+                                                alt="Bukti Pembayaran" 
+                                                // Berikan style agar tidak terlalu besar
+                                                className="mt-4 rounded-md max-w-full h-auto"
+                                            />
+                                        ) : (
+                                            <p className="mt-4">Memuat URL gambar...</p>
+                                        )}
                                     </DialogDescription>
                                 </DialogHeader>
                             </DialogContent>
