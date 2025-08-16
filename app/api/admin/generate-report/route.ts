@@ -10,10 +10,10 @@ const formatCurrency = (amount: number) => `Rp ${amount.toLocaleString('id-ID')}
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
-    const adminName = (session?.user as any)?.username || 'Admin';
+        const adminName = session?.user?.username || 'Admin';
 
     if (!session?.user?.id) {
-        return NextResponse.json({ message: 'Akses ditolak. Anda harus login.' }, { status: 401 });
+        return NextResponse.json({ message: 'Akses ditolak.' }, { status: 401 });
     }
 
     try {
