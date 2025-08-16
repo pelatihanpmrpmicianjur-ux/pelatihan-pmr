@@ -30,7 +30,7 @@ import {
     confirmRegistrationAction, 
     rejectRegistrationAction, 
     deleteRegistrationAction 
-} from '@/actions/registration';
+} from '@/actions/admin';
 // Definisikan tipe data yang lebih spesifik untuk data yang kita fetch
 type TentInfo = {
     quantity: number;

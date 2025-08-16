@@ -11,7 +11,7 @@ import {
     deleteRegistrationAction,
     getRegistrationDetailsAction,
     getRegistrations, RegistrationWithTents  // Impor ini juga dari actions
-} from "@/actions/registration";
+} from "@/actions/admin";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +27,7 @@ import { format } from "date-fns";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
-import { generateDailyReportAction } from '@/actions/registration';
+import { generateDailyReportAction } from '@/actions/admin';
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
 const statusTextMap: { [key in RegistrationStatus]: string } = { DRAFT: 'Draft', SUBMITTED: 'Menunggu Konfirmasi', CONFIRMED: 'Terkonfirmasi', REJECTED: 'Ditolak' };

@@ -1,6 +1,6 @@
 // File: components/admin/dashboard-stats.tsx
 'use client';
-import { getDashboardStats, Stats } from "@/actions/registration";
+import { getDashboardStats, Stats } from "@/actions/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { School, DollarSign, RefreshCw } from "lucide-react";
 import { useEffect, useState, useTransition } from "react";

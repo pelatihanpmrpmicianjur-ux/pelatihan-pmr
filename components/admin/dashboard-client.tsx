@@ -1,11 +1,11 @@
 // File: components/admin/dashboard-client.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { DashboardStats } from '@/components/admin/dashboard-stats';
 import { DashboardTable } from '@/components/admin/dashboard-table';
 import { LoginHistory } from '@/components/admin/login-history';
-import { getRegistrations, getDashboardStats, getLoginHistory, type RegistrationWithTents, type Stats, type LoginHistoryItem } from '@/actions/registration';
+import { getDashboardStats, getLoginHistory, type Stats, type LoginHistoryItem, getRegistrations, type RegistrationWithTents  } from '@/actions/admin';
 
 type DashboardClientProps = {
     initialRegistrations: RegistrationWithTents[];

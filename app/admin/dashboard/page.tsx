@@ -6,8 +6,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { DashboardClient } from '@/components/admin/dashboard-client'; // Impor komponen klien baru
-import { getRegistrations, getDashboardStats, getLoginHistory } from '@/actions/registration';
-import { Loader2 } from 'lucide-react';
+import { getRegistrations, getDashboardStats, getLoginHistory } from '@/actions/admin';
 
 // Komponen Halaman Utama (Server)
 export default async function DashboardPage() {
