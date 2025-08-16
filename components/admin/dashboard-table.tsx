@@ -27,7 +27,7 @@ import { format } from "date-fns";
 import * as XLSX from 'xlsx';
 import { RegistrationStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
-import { generateDailyReportAction } from '@/actions/admin';
+import { generateDailyReportAction } from '@/actions/pdf';
 // Tipe data dan map status
 const statusVariantMap: { [key in RegistrationStatus]: "default" | "destructive" | "secondary" | "outline" } = { DRAFT: 'outline', SUBMITTED: 'secondary', CONFIRMED: 'default', REJECTED: 'destructive' };
 const statusTextMap: { [key in RegistrationStatus]: string } = { DRAFT: 'Draft', SUBMITTED: 'Menunggu Konfirmasi', CONFIRMED: 'Terkonfirmasi', REJECTED: 'Ditolak' };
